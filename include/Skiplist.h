@@ -20,7 +20,7 @@ class Node {
   std::string                        value_;
   std::vector<std::shared_ptr<Node>> forward;
   uint64_t                           transaction_id;
-  Node(const std::string& key, const std::string& value, int level, uint64_t transaction_ids = 0)
+  Node(const std::string& key, const std::string& value, int level, const uint64_t transaction_ids = 0)
       : key_(key), value_(value), forward(level, nullptr), transaction_id(transaction_ids) {}
   auto operator<=>(const Node& other) const;
 };
@@ -57,12 +57,12 @@ class Skiplist {
     head = std::make_shared<Node>("", "", max_level_);
   }  // 默认最大16层
 
-  bool Insert(const std::string& key, const std::string& value, uint64_t transaction_id = 0);
+  bool Insert(const std::string& key, const std::string& value, const uint64_t transaction_id = 0);
 
   bool Delete(const std::string& key);
 
-  std::optional<std::string> Contain(const std::string& key, uint64_t transaction_id = 0);
-  std::shared_ptr<Node>      Get(const std::string& key, uint64_t transaction_id = 0);
+  std::optional<std::string> Contain(const std::string& key, const uint64_t transaction_id = 0);
+  std::shared_ptr<Node>      Get(const std::string& key, const uint64_t transaction_id = 0);
   std::vector<std::pair<std::string, std::string>> flush();
   std::size_t                                      get_size();
   std::size_t                                      getnodecount();
@@ -71,8 +71,8 @@ class Skiplist {
   auto                                             seekToLast();
   SkiplistIterator                                 end();
   SkiplistIterator                                 begin();
-  SkiplistIterator prefix_serach_begin(const std::string& key, uint64_t transaction_id = 0);
-  SkiplistIterator prefix_serach_end(const std::string& key, uint64_t transaction_id = 0);
+  SkiplistIterator prefix_serach_begin(const std::string& key, const uint64_t transaction_id = 0);
+  SkiplistIterator prefix_serach_end(const std::string& key, const uint64_t transaction_id = 0);
 
   void                    set_status(Global_::SkiplistStatus status);
   Global_::SkiplistStatus get_status() const;

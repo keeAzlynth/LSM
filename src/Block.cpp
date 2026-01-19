@@ -128,7 +128,7 @@ std::optional<uint64_t> Block::get_tranc_id(const std::size_t offset) const {
   std::memcpy(&value_len, Data_.data() + pos, sizeof(uint16_t));
   pos += sizeof(uint16_t) + value_len;
   uint64_t tr;
-  std::memcpy(&tr, Data_.data() + pos, sizeof(uint64_t));
+  std::memcpy(&tr, Data_.data() + pos, sizeof(const uint64_t));
   return tr;
 }
 std::string Block::get_first_key() {
@@ -138,7 +138,7 @@ std::string Block::get_first_key() {
   return get_key(Offset_[0]);
 }
 
-std::optional<size_t> Block::get_idx_binary(const std::string& key, uint64_t tranc_id) {
+std::optional<size_t> Block::get_idx_binary(const std::string& key, const uint64_t tranc_id) {
   if (Offset_.empty()) {
     return std::nullopt;
   }
@@ -170,7 +170,7 @@ std::optional<size_t> Block::get_idx_binary(const std::string& key, uint64_t tra
 }
 
 std::optional<size_t> Block::get_prefix_begin_idx_binary(const std::string& key,
-                                                         uint64_t           tranc_id) {
+                                                         const uint64_t           tranc_id) {
   if (Offset_.empty())
     return std::nullopt;
 
@@ -205,7 +205,7 @@ std::optional<size_t> Block::get_prefix_begin_idx_binary(const std::string& key,
   return std::nullopt;
 }
 
-std::optional<size_t> Block::get_prefix_end_idx_binary(const std::string& key, uint64_t tranc_id) {
+std::optional<size_t> Block::get_prefix_end_idx_binary(const std::string& key, const uint64_t tranc_id) {
   if (Offset_.empty()) {
     return std::nullopt;
   }
@@ -284,7 +284,7 @@ std::pair<std::string, std::string> Block::get_first_and_last_key() {
   std::string last_key  = get_key(Offset_[Offset_.size() - 1]);
   return {first_key, last_key};
 }
-bool Block::add_entry(const std::string& key, const std::string& value, uint64_t tranc_id,
+bool Block::add_entry(const std::string& key, const std::string& value, const uint64_t tranc_id,
                       bool force_write) {
   if ((!force_write) &&
       (get_cur_size() + key.size() + value.size() + 3 * sizeof(uint16_t) > capcity) &&
@@ -293,7 +293,7 @@ bool Block::add_entry(const std::string& key, const std::string& value, uint64_t
   }
   // 计算entry大小：key长度(2B) + key + value长度(2B) + value + tranc_id
   size_t entry_size =
-      sizeof(uint16_t) + key.size() + sizeof(uint16_t) + value.size() + sizeof(uint64_t);
+      sizeof(uint16_t) + key.size() + sizeof(uint16_t) + value.size() + sizeof(const uint64_t);
   size_t old_size = Data_.size();
   Data_.resize(old_size + entry_size);
 
@@ -313,7 +313,7 @@ bool Block::add_entry(const std::string& key, const std::string& value, uint64_t
          value_len);
   // 写入tranc_id
   memcpy(Data_.data() + old_size + sizeof(uint16_t) + key_len + sizeof(uint16_t) + value_len,
-         &tranc_id, sizeof(uint64_t));
+         &tranc_id, sizeof(const uint64_t));
   // 记录偏移
   Offset_.push_back(old_size);
   return true;
@@ -322,7 +322,7 @@ bool Block::is_empty() const {
   return Data_.empty() && Offset_.empty();
 }
 
-BlockIterator Block::get_iterator(const std::string& key, uint64_t tranc_id) {
+BlockIterator Block::get_iterator(const std::string& key, const uint64_t tranc_id) {
   auto idx = get_idx_binary(key, tranc_id);
   if (!idx.has_value()) {
     return end();
@@ -339,7 +339,7 @@ BlockIterator Block::end() {
 }
 
 std::optional<std::pair<std::shared_ptr<BlockIterator>, std::shared_ptr<BlockIterator>>>
-Block::get_prefix_iterator(std::string key, uint64_t tranc_id) {
+Block::get_prefix_iterator(std::string key, const uint64_t tranc_id) {
   auto result1 = get_prefix_begin_idx_binary(key, tranc_id);
   if (!result1.has_value()) {
     return std::nullopt;
