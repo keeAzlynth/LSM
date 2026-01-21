@@ -170,7 +170,7 @@ std::optional<size_t> Block::get_idx_binary(const std::string& key, const uint64
 }
 
 std::optional<size_t> Block::get_prefix_begin_idx_binary(const std::string& key,
-                                                         const uint64_t           tranc_id) {
+                                                         const uint64_t     tranc_id) {
   if (Offset_.empty())
     return std::nullopt;
 
@@ -205,7 +205,8 @@ std::optional<size_t> Block::get_prefix_begin_idx_binary(const std::string& key,
   return std::nullopt;
 }
 
-std::optional<size_t> Block::get_prefix_end_idx_binary(const std::string& key, const uint64_t tranc_id) {
+std::optional<size_t> Block::get_prefix_end_idx_binary(const std::string& key,
+                                                       const uint64_t     tranc_id) {
   if (Offset_.empty()) {
     return std::nullopt;
   }

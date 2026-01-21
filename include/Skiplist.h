@@ -20,7 +20,8 @@ class Node {
   std::string                        value_;
   std::vector<std::shared_ptr<Node>> forward;
   uint64_t                           transaction_id;
-  Node(const std::string& key, const std::string& value, int level, const uint64_t transaction_ids = 0)
+  Node(const std::string& key, const std::string& value, int level,
+       const uint64_t transaction_ids = 0)
       : key_(key), value_(value), forward(level, nullptr), transaction_id(transaction_ids) {}
   auto operator<=>(const Node& other) const;
 };

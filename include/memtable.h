@@ -2,20 +2,22 @@
 #include "Skiplist.h"
 #include "Sstable.h"
 #include <list>
+#include <memory>
 #include <optional>
 #include <queue>
 #include <shared_mutex>
 #include <string>
 
 class MemTableIterator;
+class Sstbuild;
 bool operator==(const MemTableIterator& lhs, const MemTableIterator& rhs) noexcept;
 
 class MemTableIterator : public BaseIterator {
  public:
   friend bool operator==(const MemTableIterator& lhs, const MemTableIterator& rhs) noexcept;
   using valuetype = std::pair<std::string, std::string>;
-  MemTableIterator(std::vector<SerachIterator> iter, uint64_t max_transaction_id);
-  MemTableIterator(const SkiplistIterator& iter, uint64_t max_transaction_id);
+  MemTableIterator(std::vector<SerachIterator> iter, const uint64_t max_transaction_id);
+  MemTableIterator(const SkiplistIterator& iter, const uint64_t max_transaction_id);
   ~MemTableIterator() = default;
 
   bool valid() const override;
@@ -49,31 +51,33 @@ class MemTable {
   MemTable();
   ~MemTable();
 
-  void put(const std::string& key, const std::string& value, uint64_t transaction_id = 0);
-  void put_mutex(const std::string& key, const std::string& value, uint64_t transaction_id = 0);
+  void put(const std::string& key, const std::string& value, const uint64_t transaction_id = 0);
+  void put_mutex(const std::string& key, const std::string& value,
+                 const uint64_t transaction_id = 0);
   void put_batch(const std::vector<std::pair<std::string, std::string>>& key_value_pairs,
-                 uint64_t                                                transaction_id = 0);
-  std::optional<std::string> get(const std::string& key);
+                 const uint64_t                                          transaction_id = 0);
+  std::optional<std::pair<std::string, uint64_t>> get(const std::string& key,
+                                                      const uint64_t     transaction_id = 0);
 
-  SkiplistIterator cur_get(const std::string& key, uint64_t transaction_id = 0);
-  SkiplistIterator fix_get(const std::string& key, uint64_t transaction_id = 0);
+  SkiplistIterator cur_get(const std::string& key, const uint64_t transaction_id = 0);
+  SkiplistIterator fix_get(const std::string& key, const uint64_t transaction_id = 0);
   SkiplistIterator get_mutex(const std::string& key, std::vector<std::string>& values);
   std::vector<std::tuple<std::string, std::optional<std::string>, std::optional<uint64_t>>>
-  get_batch(const std::vector<std::string>& key_s, uint64_t transaction_id = 0);
+  get_batch(const std::vector<std::string>& key_s, const uint64_t transaction_id = 0);
 
   size_t get_cur_size();
   size_t get_fixed_size();
   size_t get_total_size();
-  void   remove(const std::string& key, uint64_t transaction_id = 0);
-  void   remove_mutex(const std::string& key, uint64_t transaction_id = 0);
-  void   remove_batch(const std::vector<std::string>& key_pairs, uint64_t transaction_id = 0);
+  void   remove(const std::string& key, const uint64_t transaction_id = 0);
+  void   remove_mutex(const std::string& key, const uint64_t transaction_id = 0);
+  void   remove_batch(const std::vector<std::string>& key_pairs, const uint64_t transaction_id = 0);
   bool   IsFull();
-  void   flush(Sstbuild& sstbuild);
-  void   flushsync(Sstbuild& sstbuild);
-  void   frozen_cur_table();
-  MemTableIterator begin();
-  MemTableIterator end();
-  MemTableIterator prefix_serach(const std::string& key, uint64_t transaction_id = 0);
+  std::shared_ptr<Skiplist> flush();
+  std::shared_ptr<Skiplist> flushsync();
+  void                      frozen_cur_table();
+  MemTableIterator          begin();
+  MemTableIterator          end();
+  MemTableIterator prefix_serach(const std::string& key, const uint64_t transaction_id = 0);
   enum class SkiplistStatus {
     kNormal,
     KFreezing,

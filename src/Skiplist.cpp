@@ -1,6 +1,5 @@
 #include "../include/Skiplist.h"
 
-
 auto Node::operator<=>(const Node& other) const {
   return key_ <=> other.key_;
 }
@@ -58,7 +57,8 @@ std::pair<std::string, std::string> SkiplistIterator::getValue() const {
   return {"", ""};
 }
 
-bool Skiplist::Insert(const std::string& key, const std::string& value, const uint64_t transaction_id) {
+bool Skiplist::Insert(const std::string& key, const std::string& value,
+                      const uint64_t transaction_id) {
   auto result = Contain(key);
   if (result.has_value() && result.value() == value) {
     // 如果已经存在，则不插入
@@ -75,12 +75,12 @@ bool Skiplist::Insert(const std::string& key, const std::string& value, const ui
     if (current->forward[i] && current->forward[i]->key_ == key &&
         current->forward[i]->transaction_id <= transaction_id) {
       // 如果当前节点的key等于要插入的key，同时transation_id小于等于当前id,则更新
-        size_bytes += (value.size() - current->forward[i]->value_.size())*i;
-      while (i>=0) {
-      // 更新节点的值
-      current->forward[i]->value_         = value;
-      current->forward[i]->transaction_id = transaction_id;
-      --i;
+      size_bytes += (value.size() - current->forward[i]->value_.size()) * i;
+      while (i >= 0) {
+        // 更新节点的值
+        current->forward[i]->value_         = value;
+        current->forward[i]->transaction_id = transaction_id;
+        --i;
       }
       return true;
     }
@@ -145,7 +145,8 @@ bool Skiplist::Delete(const std::string& key) {
   return true;
 }
 
-std::optional<std::string> Skiplist::Contain(const std::string& key, const uint64_t transaction_id) {
+std::optional<std::string> Skiplist::Contain(const std::string& key,
+                                             const uint64_t     transaction_id) {
   auto current = head;
   // 从最高层开始查找
   for (int i = current_level - 1; i >= 0; i--) {
@@ -153,7 +154,11 @@ std::optional<std::string> Skiplist::Contain(const std::string& key, const uint6
       current = current->forward[i];
     }
     if (current->forward[i] && current->forward[i]->key_ == key) {
-      return current->forward[i]->value_;
+      if (transaction_id == 0) {
+        return current->forward[i]->value_;
+      } else if (current->forward[i]->transaction_id <= transaction_id) {
+        return current->forward[i]->value_;
+      }
     }
   }
   return std::nullopt;  // 如果没有找到，返回空值
@@ -211,7 +216,8 @@ SkiplistIterator Skiplist::begin() {
   return SkiplistIterator(head->forward[0]);
 }
 
-SkiplistIterator Skiplist::prefix_serach_begin(const std::string& key, const uint64_t transaction_id) {
+SkiplistIterator Skiplist::prefix_serach_begin(const std::string& key,
+                                               const uint64_t     transaction_id) {
   auto current = head;
   for (int i = current_level - 1; i >= 0; --i) {
     while (current->forward[i] && current->forward[i]->key_ < key) {
@@ -223,7 +229,8 @@ SkiplistIterator Skiplist::prefix_serach_begin(const std::string& key, const uin
   }
   return SkiplistIterator(nullptr);
 }
-SkiplistIterator Skiplist::prefix_serach_end(const std::string& key, const uint64_t transaction_id) {
+SkiplistIterator Skiplist::prefix_serach_end(const std::string& key,
+                                             const uint64_t     transaction_id) {
   auto Newkey = key + '\xff';
   auto result = prefix_serach_begin(key);
   if (result.current == nullptr) {

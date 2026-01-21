@@ -17,8 +17,7 @@ protected:
 TEST_F(MemtableTest, BasicPutGet) {
     memtable->put("key1", "value1");
     auto result = memtable->get("key1");
-    EXPECT_TRUE(result.has_value());
-    EXPECT_EQ(result.value(), "value1");
+    EXPECT_EQ(result.value().first, "value1");
 }
 
 // 测试带锁的 put/get 操作
@@ -113,8 +112,7 @@ TEST_F(MemtableTest, ConcurrentOperations) {
     // 验证所有数据都正确写入
     for(int i = 0; i < 10; i++) {
         auto result = memtable->get("key" + std::to_string(i));
-        EXPECT_TRUE(result.has_value());
-        EXPECT_EQ(result.value(), "value" + std::to_string(i));
+        EXPECT_EQ(result.value().first, "value" + std::to_string(i));
     }
 }
 
@@ -186,7 +184,7 @@ TEST_F(MemtableTest, PerformanceAndMemoryUsageTest) {
         std::string key = PREFIX + std::to_string(i);
         auto result = memtable->get(key);
         EXPECT_TRUE(result.has_value());
-        EXPECT_EQ(result.value(), "value" + std::to_string(i));
+        EXPECT_EQ(result.value().first, "value" + std::to_string(i));
     }
     end_time = std::chrono::high_resolution_clock::now();
     auto query_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
@@ -246,7 +244,7 @@ TEST_F(MemtableTest, ConcurrentPerformanceAndMemoryUsageTest) {
                 std::string key = PREFIX + std::to_string(i);
                 auto result = memtable->get(key);
                 EXPECT_TRUE(result.has_value());
-                EXPECT_EQ(result.value(), "value" + std::to_string(i));
+                EXPECT_EQ(result.value().first, "value" + std::to_string(i));
             }
         });
     }

@@ -1,5 +1,5 @@
 #include "../../include/memtable.h"
-#include "../../include/SstableIterator.h"
+#include "../../include/BlockIterator.h"
 #include "../../include/Blockcache.h"
 #include <gtest/gtest.h>
 #include <memory>
@@ -55,7 +55,11 @@ TEST_F(SstableTest, BuildAndGetPrefixSingleKey_ManyBlocks) {
     memtable->put(i.first, i.second, 0);
   }
   // 然后在最后调用一次 flushsync，把所有数据刷到 builder
-  memtable->flushsync(builder);
+ auto res= memtable->flushsync();
+ for (auto i=res->begin();i!=res->end();++i) {
+  auto kv=i.getValue();
+ builder.add(kv.first, kv.second);
+ }
 
   std::shared_ptr<Sstable> sst;
   try {
@@ -161,7 +165,7 @@ static std::vector<std::string> collect_prefix_keys(const std::shared_ptr<BlockI
   if (!begin || !end)
     return out;
   // iterate by index comparison (end is exclusive)
-  while (begin->getIndex() < end->getIndex()) {
+  while (begin->getIndex() != end->getIndex()) {
     auto kv = begin->getValue();
     // stop if not matching prefix
     if (!kv.first.starts_with(prefix))

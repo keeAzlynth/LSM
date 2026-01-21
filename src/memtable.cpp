@@ -1,5 +1,8 @@
 #include "../include/memtable.h"
+#include <memory>
 #include <mutex>
+#include <optional>
+#include <string>
 #include <utility>
 bool operator==(const MemTableIterator& lhs, const MemTableIterator& rhs) noexcept {
   if (lhs.queue_.empty() || rhs.queue_.empty()) {
@@ -9,7 +12,7 @@ bool operator==(const MemTableIterator& lhs, const MemTableIterator& rhs) noexce
          lhs.queue_.top().value_ == rhs.queue_.top().value_ &&
          lhs.queue_.top().transaction_id_ == rhs.queue_.top().transaction_id_;
 }
-MemTableIterator::MemTableIterator(std::vector<SerachIterator> iter, uint64_t transaction_id)
+MemTableIterator::MemTableIterator(std::vector<SerachIterator> iter, const uint64_t transaction_id)
     : max_transaction_id(0) {
   for (auto& it : iter) {
     queue_.push(it);
@@ -24,7 +27,7 @@ MemTableIterator::MemTableIterator(std::vector<SerachIterator> iter, uint64_t tr
     }
   }
 }
-MemTableIterator::MemTableIterator(const SkiplistIterator& iter, uint64_t transaction_id)
+MemTableIterator::MemTableIterator(const SkiplistIterator& iter, const uint64_t transaction_id)
     : max_transaction_id(transaction_id) {
   list_iter_ = std::make_shared<SkiplistIterator>(iter);
 }
@@ -143,12 +146,13 @@ MemTable::MemTable() {
 bool MemTableIterator::valid() const {
   return !queue_.empty();
 }
-void MemTable::put(const std::string& key, const std::string& value, uint64_t transaction_id) {
+void MemTable::put(const std::string& key, const std::string& value,
+                   const uint64_t transaction_id) {
   current_table->Insert(key, value, transaction_id);
 }
 
 void MemTable::put_mutex(const std::string& key, const std::string& value,
-                         uint64_t transaction_id) {
+                         const uint64_t transaction_id) {
   {
     std::unique_lock<std::shared_mutex> lock(cur_lock_);
     current_table->Insert(key, value, transaction_id);
@@ -159,7 +163,7 @@ void MemTable::put_mutex(const std::string& key, const std::string& value,
   }
 }
 void MemTable::put_batch(const std::vector<std::pair<std::string, std::string>>& key_value_pairs,
-                         uint64_t                                                transaction_id) {
+                         const uint64_t                                          transaction_id) {
   for (const auto& pair : key_value_pairs) {
     current_table->Insert(pair.first, pair.second, transaction_id);
   }
@@ -168,37 +172,38 @@ void MemTable::put_batch(const std::vector<std::pair<std::string, std::string>>&
     frozen_cur_table();
   }
 }
-std::optional<std::string> MemTable::get(const std::string& key) {
+std::optional<std::pair<std::string, uint64_t>> MemTable::get(const std::string& key,
+                                                              const uint64_t     transaction_id) {
   std::shared_lock<std::shared_mutex> lock(cur_lock_);
-  auto                                result = current_table->Contain(key);
-  if (result.has_value()) {
-    // 检查是否为删除标记
-    if (result.value().empty()) {
+  auto                                result = current_table->Get(key, transaction_id);
+  if (result) {
+    // 检查是否为删除标记s
+    if (result->value_.empty()) {
       return std::nullopt;  // 如果是空值，表示该key已被删除
     }
-    return result;
+    return std::make_pair(result->value_, result->transaction_id);
   }
 
   lock.unlock();
   std::shared_lock<std::shared_mutex> second_lock(fix_lock_);
   for (const auto& fixed_table : fixed_tables) {
-    auto result = fixed_table->Contain(key);
-    if (result.has_value()) {
-      // 同样检查固定表中的删除标记
-      if (result.value().empty()) {
-        return std::nullopt;
+    auto result = fixed_table->Get(key, transaction_id);
+    if (result) {
+      // 检查是否为删除标记
+      if (result->value_.empty()) {
+        return std::nullopt;  // 如果是空值，表示该key已被删除
       }
-      return result;
+      return std::make_pair(result->value_, result->transaction_id);
     }
   }
   return std::nullopt;
 }
 
-SkiplistIterator MemTable::cur_get(const std::string& key, uint64_t transaction_id) {
+SkiplistIterator MemTable::cur_get(const std::string& key, const uint64_t transaction_id) {
   std::shared_lock<std::shared_mutex> lock(cur_lock_);
   return SkiplistIterator(current_table->Get(key, transaction_id));
 }
-SkiplistIterator MemTable::fix_get(const std::string& key, uint64_t transaction_id) {
+SkiplistIterator MemTable::fix_get(const std::string& key, const uint64_t transaction_id) {
   std::shared_lock<std::shared_mutex> lock(fix_lock_);
   for (const auto& result : fixed_tables) {
     if (result->Contain(key, transaction_id).has_value()) {
@@ -221,12 +226,12 @@ SkiplistIterator MemTable::get_mutex(const std::string& key, std::vector<std::st
 }
 
 std::vector<std::tuple<std::string, std::optional<std::string>, std::optional<uint64_t>>>
-MemTable::get_batch(const std::vector<std::string>& key_pairs, uint64_t transaction_id) {
+MemTable::get_batch(const std::vector<std::string>& key_pairs, const uint64_t transaction_id) {
   std::vector<std::tuple<std::string, std::optional<std::string>, std::optional<uint64_t>>> result;
   for (const auto& pair : key_pairs) {
-    auto value = get(pair);
-    if (value.has_value() && !value.value().empty()) {  // 添加空值检查
-      result.emplace_back(pair, value, transaction_id);
+    auto value = get(pair, transaction_id);
+    if (value.has_value() && !value.value().first.empty()) {  // 添加空值检查
+      result.emplace_back(pair, value->first, value->second);
     } else {
       result.emplace_back(pair, std::nullopt, std::nullopt);
     }
@@ -245,13 +250,13 @@ std::size_t MemTable::get_total_size() {
   return get_cur_size() + get_fixed_size();
 }
 
-void MemTable::remove(const std::string& key, uint64_t transaction_id) {
+void MemTable::remove(const std::string& key, const uint64_t transaction_id) {
   current_table->Insert(key, "", transaction_id);
   if (current_table->get_size() > Global_::MAX_MEMTABLE_SIZE_PER_TABLE) {
     frozen_cur_table();
   }
 }
-void MemTable::remove_mutex(const std::string& key, uint64_t transaction_id) {
+void MemTable::remove_mutex(const std::string& key, const uint64_t transaction_id) {
   {
     std::unique_lock<std::shared_mutex> lock(cur_lock_);
     current_table->Insert(key, "", transaction_id);
@@ -262,7 +267,8 @@ void MemTable::remove_mutex(const std::string& key, uint64_t transaction_id) {
   }
 }
 // 批量删除
-void MemTable::remove_batch(const std::vector<std::string>& key_pairs, uint64_t transaction_id) {
+void MemTable::remove_batch(const std::vector<std::string>& key_pairs,
+                            const uint64_t                  transaction_id) {
   std::unique_lock<std::shared_mutex> lock(cur_lock_);
   for (const auto& pair : key_pairs) {
     current_table->Insert(pair, "", transaction_id);
@@ -277,7 +283,7 @@ bool MemTable::IsFull() {
 }
 
 // This function is used to flush the current memtable to disk,刷新到磁盘
-void MemTable::flush(Sstbuild& sstbuild) {
+std::shared_ptr<Skiplist> MemTable::flush() {
   std::unique_lock<std::shared_mutex> lock(cur_lock_);
   auto                                new_table = std::make_shared<Skiplist>(MAX_LEVEL);
   fixed_tables.push_back(std::move(current_table));
@@ -285,23 +291,20 @@ void MemTable::flush(Sstbuild& sstbuild) {
   fixed_bytes += current_table->get_size();
   if (fixed_tables.size() > Global_::MAX_MEMTABLE_SIZE_PER_TABLE) {
     auto frozen_memtable = fixed_tables.front();
-    for (auto it = frozen_memtable->begin(); it != frozen_memtable->end(); ++it) {
-      sstbuild.add(it.getValue().first, it.getValue().second, it.getseq());
-    }
     fixed_tables.pop_front();
+    return frozen_memtable;
   }
+  return std::make_shared<Skiplist>();
 }
-void MemTable::flushsync(Sstbuild& sstbuild) {
+std::shared_ptr<Skiplist> MemTable::flushsync() {
   std::unique_lock<std::shared_mutex> lock(cur_lock_);
   auto                                new_table = std::make_shared<Skiplist>(MAX_LEVEL);
   fixed_tables.push_back(std::move(current_table));
   current_table = std::move(new_table);
   fixed_bytes += current_table->get_size();
-  auto& it = fixed_tables.front();
-  for (auto res = it->begin(); res != it->end(); ++res) {
-    sstbuild.add(res.getValue().first, res.getValue().second, res.getseq());
-  }
+  auto it = fixed_tables.front();
   fixed_tables.clear();
+  return it;
 }
 void MemTable::frozen_cur_table() {
   std::unique_lock<std::shared_mutex> lock(cur_lock_);
@@ -321,7 +324,7 @@ MemTableIterator MemTable::end() {
 }
 // 迭代器
 
-MemTableIterator MemTable::prefix_serach(const std::string& key, uint64_t transaction_id) {
+MemTableIterator MemTable::prefix_serach(const std::string& key, const uint64_t transaction_id) {
   std::vector<SerachIterator>         iter;
   std::shared_lock<std::shared_mutex> lock(cur_lock_);
   if (!current_table) {
