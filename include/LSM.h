@@ -26,9 +26,10 @@ class LSM_Engine : public std::enable_shared_from_this<LSM_Engine> {
   size_t cur_max_level = 0;
 
  public:
-  LSM_Engine(std::string path, size_t block_cache_capacity=Global_::Block_CACHE_capacity, size_t block_cache_k=Global_::Block_CACHE_K);
+  LSM_Engine(std::string path, size_t block_cache_capacity = Global_::Block_CACHE_capacity,
+             size_t block_cache_k = Global_::Block_CACHE_K);
   ~LSM_Engine() = default;
- 
+
   std::optional<std::pair<std::string, uint64_t>> get(const std::string& key, uint64_t tranc_id);
   std::vector<std::tuple<std::string, std::optional<std::string>, std::optional<uint64_t>>>
   get_batch(const std::vector<std::string>& keys, uint64_t tranc_id);

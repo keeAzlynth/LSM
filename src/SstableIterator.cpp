@@ -176,7 +176,7 @@ SstIterator::valuetype SstIterator::operator*() const {
   return (**m_block_it);
 }
 
-uint64_t SstIterator::getseq() const {
+uint64_t SstIterator::get_tranc_id() const {
   return max_tranc_id_;
 }
 IteratorType SstIterator::type() const {

@@ -50,7 +50,7 @@ class SstIterator : public BaseIterator {
   auto          operator<=>(BaseIterator& rhs) const -> std::strong_ordering;
   valuetype     operator*() const override;
 
-  uint64_t     getseq() const override;
+  uint64_t     get_tranc_id() const override;
   IteratorType type() const override;
 
   BlockIterator::pointer   operator->() const;

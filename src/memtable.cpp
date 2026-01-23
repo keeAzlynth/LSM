@@ -75,7 +75,7 @@ MemTableIterator& MemTableIterator::operator++() {
 bool MemTableIterator::isEnd() {
   return queue_.empty();
 }
-uint64_t MemTableIterator::getseq() const {
+uint64_t MemTableIterator::get_tranc_id() const {
   if (queue_.empty()) {
     return 0;
   }
@@ -86,7 +86,7 @@ IteratorType MemTableIterator::type() const {
 }
 MemTableIterator::valuetype MemTableIterator::getValue() const {
   if (queue_.empty()) {
-    return std::make_pair("", "");
+    return std::make_pair(std::string(), std::string());
   }
   return std::make_pair(queue_.top().key_, queue_.top().value_);
 }
@@ -177,10 +177,6 @@ std::optional<std::pair<std::string, uint64_t>> MemTable::get(const std::string&
   std::shared_lock<std::shared_mutex> lock(cur_lock_);
   auto                                result = current_table->Get(key, transaction_id);
   if (result) {
-    // 检查是否为删除标记s
-    if (result->value_.empty()) {
-      return std::nullopt;  // 如果是空值，表示该key已被删除
-    }
     return std::make_pair(result->value_, result->transaction_id);
   }
 
@@ -189,10 +185,6 @@ std::optional<std::pair<std::string, uint64_t>> MemTable::get(const std::string&
   for (const auto& fixed_table : fixed_tables) {
     auto result = fixed_table->Get(key, transaction_id);
     if (result) {
-      // 检查是否为删除标记
-      if (result->value_.empty()) {
-        return std::nullopt;  // 如果是空值，表示该key已被删除
-      }
       return std::make_pair(result->value_, result->transaction_id);
     }
   }
@@ -230,7 +222,7 @@ MemTable::get_batch(const std::vector<std::string>& key_pairs, const uint64_t tr
   std::vector<std::tuple<std::string, std::optional<std::string>, std::optional<uint64_t>>> result;
   for (const auto& pair : key_pairs) {
     auto value = get(pair, transaction_id);
-    if (value.has_value() && !value.value().first.empty()) {  // 添加空值检查
+    if (value.has_value()) {  // 添加空值检查
       result.emplace_back(pair, value->first, value->second);
     } else {
       result.emplace_back(pair, std::nullopt, std::nullopt);
@@ -251,7 +243,7 @@ std::size_t MemTable::get_total_size() {
 }
 
 void MemTable::remove(const std::string& key, const uint64_t transaction_id) {
-  current_table->Insert(key, "", transaction_id);
+  current_table->Insert(key, std::string(), transaction_id);
   if (current_table->get_size() > Global_::MAX_MEMTABLE_SIZE_PER_TABLE) {
     frozen_cur_table();
   }
@@ -259,7 +251,7 @@ void MemTable::remove(const std::string& key, const uint64_t transaction_id) {
 void MemTable::remove_mutex(const std::string& key, const uint64_t transaction_id) {
   {
     std::unique_lock<std::shared_mutex> lock(cur_lock_);
-    current_table->Insert(key, "", transaction_id);
+    current_table->Insert(key, std::string(), transaction_id);
   }
   if (fixed_tables.size() > Global_::MAX_MEMTABLE_SIZE_PER_TABLE) {
     std::unique_lock<std::shared_mutex> lock(fix_lock_);
@@ -271,7 +263,7 @@ void MemTable::remove_batch(const std::vector<std::string>& key_pairs,
                             const uint64_t                  transaction_id) {
   std::unique_lock<std::shared_mutex> lock(cur_lock_);
   for (const auto& pair : key_pairs) {
-    current_table->Insert(pair, "", transaction_id);
+    current_table->Insert(pair, std::string(), transaction_id);
   }
   if (current_table->get_size() > Global_::MAX_MEMTABLE_SIZE_PER_TABLE) {
     std::unique_lock<std::shared_mutex> lock(fix_lock_);

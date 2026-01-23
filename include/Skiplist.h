@@ -44,7 +44,7 @@ class SkiplistIterator : public BaseIterator {
   bool                                valid() const override;
   bool                                isEnd() override;
   IteratorType                        type() const override;
-  uint64_t                            getseq() const override;
+  uint64_t                            get_tranc_id() const override;
   std::pair<std::string, std::string> getValue() const;
 
  private:

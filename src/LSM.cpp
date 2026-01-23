@@ -1,23 +1,28 @@
 #include "../include/LSM.h"
+#include <optional>
+#include <string>
+#include <tuple>
+#include <vector>
+#include "../include/SstableIterator.h"
 #include "spdlog/spdlog.h"
 
-
-LSM_Engine::LSM_Engine(std::string path,size_t block_cache_capacity,size_t block_cache_k) : data_dir(path),
-block_cache(std::make_shared<BlockCache>(block_cache_capacity,block_cache_k)) {
+LSM_Engine::LSM_Engine(std::string path, size_t block_cache_capacity, size_t block_cache_k)
+    : data_dir(path),
+      block_cache(std::make_shared<BlockCache>(block_cache_capacity, block_cache_k)) {
   // 初始化日志
- // init_spdlog_file();
+  // init_spdlog_file();
   // 创建数据目录
   if (!std::filesystem::exists(path)) {
     spdlog::info(
-        "LSMEngine--"
-        "DB path ndo not exist. Creating data directory: {}",
+        "LSM_Engine--"
+        "DB path  not exist. Creating data directory: {}",
         path);
     std::filesystem::create_directory(path);
   } else {
     // 如果目录存在，则检查是否有 sst 文件并加载
     spdlog::info(
-        "LSMEngine--"
-        "DB path exist. Loading data directory: {} ...",
+        "LSM_Engine--"
+        "DB path existed. Loading data directory: {} ...",
         path);
     for (const auto& entry : std::filesystem::directory_iterator(path)) {
       if (!entry.is_regular_file()) {
@@ -58,7 +63,7 @@ block_cache(std::make_shared<BlockCache>(block_cache_capacity,block_cache_k)) {
       std::string sst_path = get_sst_path(sst_id, level);
       auto        sst      = Sstable::open(sst_id, FileObj::open(sst_path, false), block_cache);
       spdlog::info(
-          "LSMEngine--"
+          "LSM_Engine--"
           "Loaded SST: {} successfully!",
           sst_path);
       ssts[sst_id] = sst;
@@ -79,55 +84,53 @@ block_cache(std::make_shared<BlockCache>(block_cache_capacity,block_cache_k)) {
   }
 }
 
-
-std::optional<std::pair<std::string, uint64_t>>
-LSM_Engine::get(const std::string &key, uint64_t tranc_id) {
+std::optional<std::pair<std::string, uint64_t>> LSM_Engine::get(const std::string& key,
+                                                                uint64_t           tranc_id) {
   // 1. 先查找 memtable
   auto mem_res = memtable.get(key, tranc_id);
-  if (mem_res.is_valid()) {
-    if (mem_res.get_value().size() > 0) {
-      // 值存在且不为空（没有被删除）
-      spdlog::trace("LSMEngine--"
-                    "get({},{}): value = {}, tranc_id = {} "
-                    "returning from memtable",
-                    key, tranc_id, mem_res.get_value(), mem_res.get_tranc_id());
-      return std::pair<std::string, uint64_t>{mem_res.get_value(),
-                                              mem_res.get_tranc_id()};
-    } else {
-      // memtable返回的kv的value为空值表示被删除了
-      spdlog::trace("LSMEngine--"
-                    "get({},{}): key is deleted, returning "
-                    "from memtable",
-                    key, tranc_id);
-      return std::nullopt;
-    }
+  if (mem_res.has_value() && !mem_res.value().first.empty()) {
+    // 值存在且不为空（没有被删除）
+    spdlog::trace(
+        "LSM_Engine--"
+        "get({},{}): value = {}, tranc_id = {} "
+        "returning from memtable",
+        key, tranc_id, mem_res.value(), tranc_id);
+    return std::pair<std::string, uint64_t>{mem_res.value().first, mem_res.value().second};
+  } else {
+    // memtable返回的kv的value为空值表示被删除了
+    spdlog::trace(
+        "LSM_Engine--"
+        "get({},{}): key is deleted, returning "
+        "from memtable",
+        key, tranc_id);
+    return std::nullopt;
   }
 
   // 2. l0 sst中查询
-  std::shared_lock<std::shared_mutex> rlock(ssts_mtx); // 读锁
+  std::shared_lock<std::shared_mutex> rlock(ssts_mtx);  // 读锁
 
-  for (auto &sst_id : level_sst_ids[0]) {
+  for (auto& sst_id : level_sst_ids[0]) {
     //  中的 sst_id 是按从大到小的顺序排列,
     // sst_id 越大, 表示是越晚刷入的, 优先查询
-    auto &sst = ssts[sst_id];
-    auto sst_iterator = sst->get(key, tranc_id);
+    auto& sst          = ssts[sst_id];
+    auto  sst_iterator = sst->get_Iterator(key, tranc_id);
     if (sst_iterator != sst->end()) {
-      if ((sst_iterator)->second.size() > 0) {
+      if (sst_iterator->second.size() > 0) {
         // 值存在且不为空（没有被删除）
-        spdlog::trace("LSMEngine--"
-                      "get({},{}): value = {}, tranc_id = {} "
-                      "returning from l0 sst{}",
-                      key, tranc_id, sst_iterator->second,
-                      sst_iterator.get_tranc_id(), sst_id);
-        return std::pair<std::string, uint64_t>{sst_iterator->second,
-                                                sst_iterator.get_tranc_id()};
+        spdlog::trace(
+            "LSM_Engine--"
+            "get({},{}): value = {}, tranc_id = {} "
+            "returning from l0 sst{}",
+            key, tranc_id, sst_iterator->second, sst_iterator.get_tranc_id(), sst_id);
+        return std::pair<std::string, uint64_t>{sst_iterator->second, sst_iterator.get_tranc_id()};
       } else {
         // 空值表示被删除了
-        spdlog::trace("LSMEngine--"
-                      "get({},{}): key is deleted or do not "
-                      "exist , returning "
-                      "from l0 sst{}",
-                      key, tranc_id, sst_id);
+        spdlog::trace(
+            "LSM_Engine--"
+            "get({},{}): key is deleted or do not "
+            "exist , returning "
+            "from l0 sst{}",
+            key, tranc_id, sst_id);
         return std::nullopt;
       }
     }
@@ -137,31 +140,33 @@ LSM_Engine::get(const std::string &key, uint64_t tranc_id) {
   for (size_t level = 1; level <= cur_max_level; level++) {
     std::deque<size_t> l_sst_ids = level_sst_ids[level];
     // 二分查询
-    size_t left = 0;
+    size_t left  = 0;
     size_t right = l_sst_ids.size();
     while (left < right) {
       size_t mid = left + (right - left) / 2;
-      auto &sst = ssts[l_sst_ids[mid]];
+      auto&  sst = ssts[l_sst_ids[mid]];
       if (sst->get_first_key() <= key && key <= sst->get_last_key()) {
         // 如果sst_id在中, 则在sst中查询
-        auto sst_iterator = sst->get(key, tranc_id);
-        if (sst_iterator.is_valid()) {
-          if ((sst_iterator)->second.size() > 0) {
+        auto sst_iterator = sst->get_Iterator(key, tranc_id);
+        if (sst_iterator.valid()) {
+          if (sst_iterator->second.size() > 0) {
             // 值存在且不为空（没有被删除）
-            spdlog::trace("LSMEngine--"
-                          "get({},{}): value = {}, tranc_id = {} "
-                          "returning from l{} sst{}",
-                          key, tranc_id, sst_iterator->second,
-                          sst_iterator.get_tranc_id(), level, l_sst_ids[mid]);
+            spdlog::trace(
+                "LSM_Engine--"
+                "get({},{}): value = {}, tranc_id = {} "
+                "returning from l{} sst{}",
+                key, tranc_id, sst_iterator->second, sst_iterator.get_tranc_id(), level,
+                l_sst_ids[mid]);
 
-            return std::pair<std::string, uint64_t>{
-                sst_iterator->second, sst_iterator.get_tranc_id()};
+            return std::pair<std::string, uint64_t>{sst_iterator->second,
+                                                    sst_iterator.get_tranc_id()};
           } else {
             // 空值表示被删除了
-            spdlog::trace("LSMEngine--"
-                          "get({},{}): key is deleted or do not exist "
-                          "returning from l{} sst{}",
-                          key, tranc_id, level, l_sst_ids[mid]);
+            spdlog::trace(
+                "LSM_Engine--"
+                "get({},{}): key is deleted or do not exist "
+                "returning from l{} sst{}",
+                key, tranc_id, level, l_sst_ids[mid]);
 
             return std::nullopt;
           }
@@ -176,10 +181,11 @@ LSM_Engine::get(const std::string &key, uint64_t tranc_id) {
     }
   }
 
-  spdlog::trace("LSMEngine--"
-                "get({},{}): key is not exist, returning "
-                "after checking all ssts",
-                key, tranc_id);
+  spdlog::trace(
+      "LSM_Engine--"
+      "get({},{}): key is not exist, returning "
+      "after checking all ssts",
+      key, tranc_id);
 
   return std::nullopt;
 }
@@ -190,29 +196,29 @@ LSM_Engine::get_batch(const std::vector<std::string>& keys, uint64_t tranc_id) {
   auto results = memtable.get_batch(keys, tranc_id);
 
   // 2. 如果所有键都在memtable 中找到，直接返回
-  bool need_search_sst = false;
+  std::vector<std::tuple<std::string, std::optional<std::string>, std::optional<uint64_t>>>
+      un_search;
   for (const auto& [key, value, tranc_id] : results) {
     if (!value.has_value()) {
-      // 需要查找
-      need_search_sst = true;
-      break;
+      // 需要插入
+      un_search.emplace_back(std::make_tuple(key, std::make_optional(std::string()), tranc_id));
     }
   }
 
-  if (!need_search_sst) {
+  if (un_search.empty()) {
     return results;  // 不需要查sst
   }
 
   // 2. 从 L0 层 SST 文件中批量查找未命中的键
   std::shared_lock<std::shared_mutex> rlock(ssts_mtx);  // 加读锁
-  for (auto& [key, value, tranc_id_index] : results) {
+  for (auto& [key, value, tranc_id_index] : un_search) {
     for (auto& sst_id : level_sst_ids[0]) {
       auto& sst          = ssts[sst_id];
       auto  sst_iterator = sst->get_Iterator(key, tranc_id);
       if (sst_iterator != sst->end()) {
         if (sst_iterator->second.size() > 0) {
           // 值存在且不为空
-          auto index = std::make_pair(sst_iterator->second, sst_iterator.getseq());
+          auto index = std::make_pair(sst_iterator->second, sst_iterator.get_tranc_id());
           value      = index.first;
         } else {
           // 空值表示被删除
@@ -246,7 +252,7 @@ LSM_Engine::get_batch(const std::vector<std::string>& keys, uint64_t tranc_id) {
           if (sst_iterator.valid()) {
             if (sst_iterator->second.size() > 0) {
               // 值存在且不为空
-              auto index = std::make_pair(sst_iterator->second, sst_iterator.getseq());
+              auto index = std::make_pair(sst_iterator->second, sst_iterator.get_tranc_id());
               value      = index.first;
             } else {
               // 空值表示被删除
@@ -267,7 +273,7 @@ LSM_Engine::get_batch(const std::vector<std::string>& keys, uint64_t tranc_id) {
 }
 
 std::optional<std::pair<std::string, uint64_t>> LSM_Engine::sst_get_(const std::string& key,
-                                                                    uint64_t           tranc_id) {
+                                                                     uint64_t           tranc_id) {
   // 1. l0 sst中查询
   for (auto& sst_id : level_sst_ids[0]) {
     //  中的 sst_id 是按从大到小的顺序排列,
@@ -279,11 +285,11 @@ std::optional<std::pair<std::string, uint64_t>> LSM_Engine::sst_get_(const std::
         // 值存在且不为空（没有被删除）
         // L0 SST 查询命中
         spdlog::trace(
-            "LSMEngine--"
+            "LSM_Engine--"
             "sst_get({}{}): found in l0 sst{}",
             key, tranc_id, sst_id);
 
-        return std::pair<std::string, uint64_t>{sst_iterator->second, sst_iterator.getseq()};
+        return std::pair<std::string, uint64_t>{sst_iterator->second, sst_iterator.get_tranc_id()};
       } else {
         // 空值表示被删除了
         return std::nullopt;
@@ -308,11 +314,12 @@ std::optional<std::pair<std::string, uint64_t>> LSM_Engine::sst_get_(const std::
             // 值存在且不为空（没有被删除）
             // 其他 Level SST 查询命中
             spdlog::trace(
-                "LSMEngine--"
+                "LSM_Engine--"
                 "sst_get({}{}): found in l{} sst{}",
-                key, tranc_id, level, sst_iterator.getseq());
+                key, tranc_id, level, sst_iterator.get_tranc_id());
 
-            return std::pair<std::string, uint64_t>{sst_iterator->second, sst_iterator.getseq()};
+            return std::pair<std::string, uint64_t>{sst_iterator->second,
+                                                    sst_iterator.get_tranc_id()};
           } else {
             // 空值表示被删除了
             return std::nullopt;
@@ -329,7 +336,7 @@ std::optional<std::pair<std::string, uint64_t>> LSM_Engine::sst_get_(const std::
   }
 
   spdlog::trace(
-      "LSMEngine--"
+      "LSM_Engine--"
       "sst_get({}{}): key is not exist, returning "
       "after checking all ssts",
       key, tranc_id);
@@ -340,7 +347,7 @@ std::optional<std::pair<std::string, uint64_t>> LSM_Engine::sst_get_(const std::
 uint64_t LSM_Engine::put(const std::string& key, const std::string& value, uint64_t tranc_id) {
   memtable.put(key, value, tranc_id);
   spdlog::trace(
-      "LSMEngine--"
+      "LSM_Engine--"
       "put({}, {}, {})"
       "inserted into memtable",
       key, value, tranc_id);
@@ -348,7 +355,7 @@ uint64_t LSM_Engine::put(const std::string& key, const std::string& value, uint6
   // 如果 memtable 太大，需要刷新到磁盘
   if (memtable.get_total_size() >= Global_::MAX_SSTABLE_SIZE) {
     spdlog::info(
-        "LSMEngine--"
+        "LSM_Engine--"
         "put({}, {}) memtable size exceeds limit, flushing to disk",
         key, tranc_id);
     return flush();
@@ -357,11 +364,11 @@ uint64_t LSM_Engine::put(const std::string& key, const std::string& value, uint6
 }
 
 uint64_t LSM_Engine::put_batch(const std::vector<std::pair<std::string, std::string>>& kvs,
-                              uint64_t                                                tranc_id) {
+                               uint64_t                                                tranc_id) {
   memtable.put_batch(kvs, tranc_id);
 
   spdlog::trace(
-      "LSMEngine--"
+      "LSM_Engine--"
       "put_batch with {} keys inserted into memtable",
       kvs.size());
 
@@ -376,7 +383,7 @@ uint64_t LSM_Engine::remove(const std::string& key, uint64_t tranc_id) {
   memtable.remove(key, tranc_id);
 
   spdlog::trace(
-      "LSMEngine--"
+      "LSM_Engine--"
       "remove({}, {}) marked as "
       "deleted in memtable",
       key, tranc_id);
@@ -392,7 +399,7 @@ uint64_t LSM_Engine::remove_batch(const std::vector<std::string>& keys, uint64_t
   memtable.remove_batch(keys, tranc_id);
 
   spdlog::trace(
-      "LSMEngine--"
+      "LSM_Engine--"
       "remove_batch with {} keys tagged into memtable",
       keys.size());
 
@@ -416,7 +423,7 @@ void LSM_Engine::clear() {
       std::filesystem::remove(entry.path());
 
       spdlog::info(
-          "LSMEngine--"
+          "LSM_Engine--"
           "clear file {} successfully.",
           entry.path().string());
     }
@@ -449,7 +456,7 @@ uint64_t LSM_Engine::flush() {
   // 4. 将 memtable 中最旧的表写入 SST
   std::vector<uint64_t> flushed_tranc_ids;
   auto                  sst_path = get_sst_path(new_sst_id, 0);
-  auto new_sst = memtable.flush_last(builder, sst_path, new_sst_id, flushed_tranc_ids, block_cache);
+  auto new_sst = memtable.flush(builder, sst_path, new_sst_id, flushed_tranc_ids, block_cache);
 
   // 5. 更新内存索引
   ssts[new_sst_id] = new_sst;
@@ -464,7 +471,7 @@ uint64_t LSM_Engine::flush() {
 
   // 返回新刷入的 sst 的最大的 tranc_id
   spdlog::info(
-      "LSMEngine--"
+      "LSM_Engine--"
       "Flush: Memtable flushed to SST with new sst_id={}, level=0",
       new_sst_id);
 
@@ -480,7 +487,7 @@ std::string LSM_Engine::get_sst_path(size_t sst_id, size_t target_level) {
 
 /*
 std::optional<std::pair<TwoMergeIterator, TwoMergeIterator>>
-LSMEngine::lsm_iters_monotony_predicate(uint64_t                               tranc_id,
+LSM_Engine::lsm_iters_monotony_predicate(uint64_t                               tranc_id,
                                         std::function<int(const std::string&)> predicate) {
   //  先从 memtable 中查询
   auto mem_result = memtable.iters_monotony_predicate(tranc_id, predicate);
@@ -496,7 +503,7 @@ LSMEngine::lsm_iters_monotony_predicate(uint64_t                               t
       }
 
       spdlog::trace(
-          "LSMEngine--"
+          "LSM_Engine--"
           "lsm_iters_monotony_predicate(tranc_id={}): find a range "
           "from l{} sst{}",
           tranc_id, sst_level, sst_id);
@@ -540,15 +547,15 @@ LSMEngine::lsm_iters_monotony_predicate(uint64_t                               t
 }
 */
 /*
-Level_Iterator LSMEngine::begin(uint64_t tranc_id) {
+Level_Iterator LSM_Engine::begin(uint64_t tranc_id) {
   return Level_Iterator(shared_from_this(), tranc_id);
 }
 
-Level_Iterator LSMEngine::end() {
+Level_Iterator LSM_Engine::end() {
   return Level_Iterator{};
 }
 
-void LSMEngine::full_compact(size_t src_level) {
+void LSM_Engine::full_compact(size_t src_level) {
   // 将 src_level 的 sst 全体压缩到 src_level + 1
 
   // 递归地判断下一级 level 是否需要 full compact
@@ -557,7 +564,7 @@ void LSMEngine::full_compact(size_t src_level) {
   }
 
   spdlog::debug(
-      "LSMEngine--"
+      "LSM_Engine--"
       "Compaction: Starting full compaction from level{} to level{}",
       src_level, src_level + 1);
 
@@ -596,12 +603,12 @@ void LSMEngine::full_compact(size_t src_level) {
   std::sort(level_sst_ids[src_level + 1].begin(), level_sst_ids[src_level + 1].end());
 
   spdlog::debug(
-      "LSMEngine--"
+      "LSM_Engine--"
       "Compaction: Finished compaction. New SSTs added at level{}",
       src_level + 1);
 }
 
-std::vector<std::shared_ptr<Sstable>> LSMEngine::full_l0_l1_compact(std::vector<size_t>& l0_ids,
+std::vector<std::shared_ptr<Sstable>> LSM_Engine::full_l0_l1_compact(std::vector<size_t>& l0_ids,
                                                                 std::vector<size_t>& l1_ids) {
   // TODO: 这里需要补全的是对已经完成事务的删除
   std::vector<SstIterator>          l0_iters;
@@ -631,8 +638,8 @@ std::vector<std::shared_ptr<Sstable>> LSMEngine::full_l0_l1_compact(std::vector<
 }
 */
 std::vector<std::shared_ptr<Sstable>> LSM_Engine::full_common_compact(std::vector<size_t>& lx_ids,
-                                                                     std::vector<size_t>& ly_ids,
-                                                                     size_t               level_y) {
+                                                                      std::vector<size_t>& ly_ids,
+                                                                      size_t level_y) {
   // TODO 需要补全已完成事务的滤除
   std::vector<std::shared_ptr<Sstable>> lx_iters;
   std::vector<std::shared_ptr<Sstable>> ly_iters;
@@ -655,12 +662,12 @@ std::vector<std::shared_ptr<Sstable>> LSM_Engine::full_common_compact(std::vecto
   // TODO:如果目标 level 的下一级 level+1 不存在, 则为底层的level,
   // 可以清理掉删除标记
 
-  return gen_sst_from_iter(lx_ly_begin, LSMEngine::get_sst_size(level_y), level_y);
+  return gen_sst_from_iter(lx_ly_begin, LSM_Engine::get_sst_size(level_y), level_y);
 }
 
 std::vector<std::shared_ptr<Sstable>> LSM_Engine::gen_sst_from_iter(BaseIterator& iter,
-                                                                   size_t        target_sst_size,
-                                                                   size_t        target_level) {
+                                                                    size_t        target_sst_size,
+                                                                    size_t        target_level) {
   // TODO: 这里需要补全的是对已经完成事务的删除
 
   std::vector<std::shared_ptr<Sstable>> new_ssts;
@@ -672,27 +679,27 @@ std::vector<std::shared_ptr<Sstable>> LSM_Engine::gen_sst_from_iter(BaseIterator
     if (new_sst_builder.estimated_size() >= target_sst_size) {
       size_t      sst_id   = next_sst_id++;  // TODO: 后续优化并发性
       std::string sst_path = get_sst_path(sst_id, target_level);
-      auto        new_sst  = new_sst_builder.build(sst_id, sst_path, this->block_cache);
+      auto        new_sst  = new_sst_builder.build(block_cache, sst_path, sst_id);
       new_ssts.push_back(new_sst);
 
       spdlog::debug(
-          "LSMEngine--"
+          "LSM_Engine--"
           "Compaction: Generated new SST file with sst_id={}"
           "at level{}",
           sst_id, target_level);
 
-      new_sst_builder = SSTBuilder(TomlConfig::getInstance().getLsmBlockSize(),
-                                   true);  // 重置builder
+      new_sst_builder = Sstbuild(Global_::Block_SIZE,
+                                 true);  // 重置builder
     }
   }
   if (new_sst_builder.estimated_size() > 0) {
     size_t      sst_id   = next_sst_id++;  // TODO: 后续优化并发性
     std::string sst_path = get_sst_path(sst_id, target_level);
-    auto        new_sst  = new_sst_builder.build(sst_id, sst_path, this->block_cache);
+    auto        new_sst  = new_sst_builder.build(block_cache, sst_path, sst_id);
     new_ssts.push_back(new_sst);
 
     spdlog::debug(
-        "LSMEngine--"
+        "LSM_Engine--"
         "Compaction: Generated new SST file with sst_id={} "
         "at level{}",
         sst_id, target_level);
@@ -701,12 +708,12 @@ std::vector<std::shared_ptr<Sstable>> LSM_Engine::gen_sst_from_iter(BaseIterator
   return new_ssts;
 }
 
-size_t LSMEngine::get_sst_size(size_t level) {
+size_t LSM_Engine::get_sst_size(size_t level) {
   if (level == 0) {
-    return TomlConfig::getInstance().getLsmPerMemSizeLimit();
+    return Global_::MAX_MEMTABLE_SIZE_PER_TABLE;
   } else {
-    return TomlConfig::getInstance().getLsmPerMemSizeLimit() *
-           static_cast<size_t>(std::pow(TomlConfig::getInstance().getLsmSstLevelRatio(), level));
+    return Global_::MAX_MEMTABLE_SIZE_PER_TABLE *
+           static_cast<size_t>(std::pow(Global_::LSM_SST_LEVEL_RATIO, level));
   }
 }
 
@@ -716,7 +723,7 @@ void LSM_Engine::set_tran_manager(std::shared_ptr<TranManager> tran_manager) {
 
 // *********************** LSM ***********************
 LSM::LSM(std::string path)
-    : engine(std::make_shared<LSMEngine>(path)),
+    : engine(std::make_shared<LSM_Engine>(path)),
       tran_manager_(std::make_shared<TranManager>(path)) {
   tran_manager_->set_engine(engine);
   engine->set_tran_manager(tran_manager_);
@@ -733,7 +740,7 @@ LSM::LSM(std::string path)
       }
     }
     spdlog::debug(
-        "LSMEngine--"
+        "LSM_Engine--"
         "Recover: Recovered transaction with tranc_id={}",
         tranc_id);
   }

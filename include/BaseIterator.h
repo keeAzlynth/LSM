@@ -17,10 +17,10 @@ class BaseIterator {
   virtual bool          valid() const = 0;
   virtual BaseIterator& operator++()  = 0;
   auto                  operator<=>(const BaseIterator& other) const;
-  virtual IteratorType  type() const      = 0;
-  virtual bool          isEnd()           = 0;
-  virtual valuetype     operator*() const = 0;
-  virtual uint64_t      getseq() const    = 0;
+  virtual IteratorType  type() const         = 0;
+  virtual bool          isEnd()              = 0;
+  virtual valuetype     operator*() const    = 0;
+  virtual uint64_t      get_tranc_id() const = 0;
 };
 class SerachIterator {
  public:

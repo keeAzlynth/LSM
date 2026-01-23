@@ -28,7 +28,7 @@ class MemTableIterator : public BaseIterator {
   MemTableIterator& operator++() override;
 
   bool         isEnd() override;
-  uint64_t     getseq() const override;
+  uint64_t     get_tranc_id() const override;
   IteratorType type() const override;
   valuetype    getValue() const;
   void         pop_value();

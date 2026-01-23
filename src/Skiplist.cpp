@@ -44,7 +44,7 @@ bool SkiplistIterator::isEnd() {
 IteratorType SkiplistIterator::type() const {
   return IteratorType::SkiplistIterator;
 }
-uint64_t SkiplistIterator::getseq() const {
+uint64_t SkiplistIterator::get_tranc_id() const {
   if (current) {
     return current->transaction_id;
   }
@@ -54,7 +54,7 @@ std::pair<std::string, std::string> SkiplistIterator::getValue() const {
   if (current) {
     return {current->key_, current->value_};
   }
-  return {"", ""};
+  return {std::string(), std::string()};
 }
 
 bool Skiplist::Insert(const std::string& key, const std::string& value,
@@ -267,11 +267,3 @@ int Skiplist::random_level() {
   }
   return level;
 }
-
-// 定位到最后一个元素
-// 这里的实现是一个简单的跳表迭代器，提供了基本的迭代功能
-// 你可以根据需要扩展更多功能，比如范围查询、反向迭代等
-// 当然，实际的实现可能会更复杂，取决于你的需求
-// 这里的实现是一个简单的跳表迭代器，提供了基本的迭代功能
-// 你可以根据需要扩展更多功能，比如范围查询、反向迭代等
-// 当然，实际的实现可能会更复杂，取决于你的需求
