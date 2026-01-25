@@ -1,13 +1,13 @@
 #pragma once
 #include "BaseIterator.h"
-#include <array>
 #include <atomic>
+#include <concepts>
+#include <ranges>
 #include <memory>
 #include <optional>
 #include <random>
 #include <shared_mutex>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 #include "../include/Global.h"
@@ -67,6 +67,26 @@ class Skiplist {
       : max_level(max_level_), current_level(1), size_bytes(0), nodecount(0), dis(0.0, 1.0) {
     head = std::make_shared<Node>("", "", max_level_);
   }  // 默认最大16层
+  Skiplist(const Skiplist& other)            = delete;
+  Skiplist& operator=(const Skiplist& other) = delete;
+  Skiplist(Skiplist&& other) noexcept
+      : max_level(other.max_level),
+        head(other.head),
+        current_level(other.current_level),
+        size_bytes(other.size_bytes.load()),
+        nodecount(other.nodecount.load()) {
+    other.head = nullptr;
+    size_bytes.exchange(0, std::memory_order_relaxed);
+    nodecount.exchange(0, std::memory_order_relaxed);
+  }
+  Skiplist& operator=(Skiplist&& other) noexcept {
+    std::ranges::swap(max_level, other.max_level);
+    std::ranges::swap(head, other.head);
+    std::ranges::swap(current_level, other.current_level);
+    size_bytes.exchange(other.size_bytes, std::memory_order_relaxed);
+    nodecount.exchange(other.nodecount, std::memory_order_relaxed);
+    return *this;
+  }
 
   bool Insert(const std::string& key, const std::string& value, const uint64_t transaction_id = 0);
 

@@ -261,263 +261,485 @@ TEST_F(SkiplistTest, RangeQueryPerformanceTest) {
   }
   std::print("  查询到的记录数: {}\n", count);
 }
-TEST_F(SkiplistTest, MVCCMixedWorkloadTest) {
-  // ============ 测试配置 ============
-  constexpr size_t   TOTAL_OPS     = 50000;  // 总操作数
-  constexpr int      READ_RATIO    = 80;     // 80% 读操作
-  constexpr int      WRITE_RATIO   = 15;     // 15% 写操作
-  constexpr int      DELETE_RATIO  = 5;      // 5% 删除操作（通过插入空值）
-  constexpr size_t   INITIAL_KEYS  = 1000;   // 初始键数量
-  constexpr uint64_t INITIAL_TX_ID = 1000;   // 初始事务ID
 
-  std::print("=== MVCC跳表混合工作负载测试 ===\n");
-  std::print("配置: {} 次操作 ({}%读, {}%写, {}%删除)\n", TOTAL_OPS, READ_RATIO, WRITE_RATIO,
-             DELETE_RATIO);
+// ==================== 测试1：基本MVCC可见性 ====================
+TEST_F(SkiplistTest, BasicMVCCVisibility) {
+  std::print("=== 测试1：基本MVCC可见性 ===\n");
 
-  // ============ 第一阶段：初始化数据 ============
-  // 目标：模拟已有数据，为后续操作做准备
-  std::print("\n1. 初始化数据 (插入 {} 条记录)...\n", INITIAL_KEYS);
+  const std::string key = "test_key";
 
-  uint64_t current_tx_id = INITIAL_TX_ID;
+  // 插入不同事务ID的版本
+  // 版本1: txId=100, value="value_100"
+  EXPECT_TRUE(skiplist->Insert(key, "value_100", 100));
 
-  // 插入初始数据
-  for (size_t i = 0; i < INITIAL_KEYS; ++i) {
-    std::string key   = std::format("key_{:08}", i);
-    std::string value = std::format("value_{:08}", i);
-    skiplist->Insert(key, value, current_tx_id++);
+  // 版本2: txId=200, value="value_200"
+  EXPECT_TRUE(skiplist->Insert(key, "value_200", 200));
+
+  // 版本3: txId=300, value="value_300"
+  EXPECT_TRUE(skiplist->Insert(key, "value_300", 300));
+
+  std::print("插入完成: key={} 有3个版本 (txId=100,200,300)\n", key);
+
+  // ============ 验证MVCC可见性 ============
+
+  // 测试1: txId=99时，应该看不到任何版本（因为都大于99）
+  {
+    auto result = skiplist->Contain(key, 99);
+    EXPECT_FALSE(result.has_value())
+        << "错误：txId=99应该看不到任何版本，实际看到了: " << result.value();
+    std::print("  txId=99 -> 期望: [空], 实际: [空] ✓\n");
   }
 
-  std::print("   初始事务ID范围: {} - {}\n", INITIAL_TX_ID, current_tx_id - 1);
-  std::print("   当前跳表状态: {} 节点, {} bytes\n", skiplist->getnodecount(),
-             skiplist->get_size());
-
-  // ============ 第二阶段：混合工作负载 ============
-  // 目标：测试读、写、删除（插入空值）的混合操作
-  std::print("\n2. 执行混合工作负载 ({} 次操作)...\n", TOTAL_OPS);
-
-  std::mt19937                          rng(std::random_device{}());
-  std::uniform_int_distribution<int>    op_dist(0, 99);                     // 操作类型分布
-  std::uniform_int_distribution<size_t> key_dist(0, INITIAL_KEYS * 2 - 1);  // 键分布
-  std::uniform_int_distribution<uint64_t> tx_dist(INITIAL_TX_ID, current_tx_id * 2);  // 事务ID分布
-
-  // 跟踪数据状态：记录每个key的(最新值, 最新事务ID)
-  std::unordered_map<std::string, std::pair<std::string, uint64_t>> key_states;
-
-  // 初始化key_states（所有初始键都存在）
-  for (size_t i = 0; i < INITIAL_KEYS; ++i) {
-    std::string key = std::format("key_{:08}", i);
-    key_states[key] = {std::format("value_{:08}", i), INITIAL_TX_ID + i};
+  // 测试2: txId=100时，应该看到版本1
+  {
+    auto result = skiplist->Contain(key, 100);
+    EXPECT_TRUE(result.has_value());
+    EXPECT_EQ(result.value(), "value_100")
+        << "错误：txId=100应该看到'value_100'，实际: " << result.value();
+    std::print("  txId=100 -> 期望: value_100, 实际: {} ✓\n", result.value());
   }
 
-  size_t reads = 0, writes = 0, deletes = 0;
-  size_t read_hits = 0, write_success = 0, delete_success = 0;
+  // 测试3: txId=150时，应该看到版本1（最接近且≤150的是100）
+  {
+    auto result = skiplist->Contain(key, 150);
+    EXPECT_TRUE(result.has_value());
+    EXPECT_EQ(result.value(), "value_100")
+        << "错误：txId=150应该看到'value_100'，实际: " << result.value();
+    std::print("  txId=150 -> 期望: value_100, 实际: {} ✓\n", result.value());
+  }
 
-  auto start_time = std::chrono::high_resolution_clock::now();
+  // 测试4: txId=200时，应该看到版本2
+  {
+    auto result = skiplist->Contain(key, 200);
+    EXPECT_TRUE(result.has_value());
+    EXPECT_EQ(result.value(), "value_200")
+        << "错误：txId=200应该看到'value_200'，实际: " << result.value();
+    std::print("  txId=200 -> 期望: value_200, 实际: {} ✓\n", result.value());
+  }
 
-  for (size_t op_idx = 0; op_idx < TOTAL_OPS; ++op_idx) {
-    int         op_type = op_dist(rng);
-    size_t      key_idx = key_dist(rng);
-    std::string key     = std::format("key_{:08}", key_idx);
+  // 测试5: txId=250时，应该看到版本2
+  {
+    auto result = skiplist->Contain(key, 250);
+    EXPECT_TRUE(result.has_value());
+    EXPECT_EQ(result.value(), "value_200")
+        << "错误：txId=250应该看到'value_200'，实际: " << result.value();
+    std::print("  txId=250 -> 期望: value_200, 实际: {} ✓\n", result.value());
+  }
 
-    if (op_type < READ_RATIO) {
-      // ============ 读操作测试 ============
-      // 目标：测试MVCC可见性，确保只能看到≤给定事务ID的记录
+  // 测试6: txId=300时，应该看到版本3
+  {
+    auto result = skiplist->Contain(key, 300);
+    EXPECT_TRUE(result.has_value());
+    EXPECT_EQ(result.value(), "value_300")
+        << "错误：txId=300应该看到'value_300'，实际: " << result.value();
+    std::print("  txId=300 -> 期望: value_300, 实际: {} ✓\n", result.value());
+  }
 
-      // 选择一个随机的事务ID进行查询
-      uint64_t read_tx_id = tx_dist(rng);
+  // 测试7: txId=400时，应该看到版本3
+  {
+    auto result = skiplist->Contain(key, 400);
+    EXPECT_TRUE(result.has_value());
+    EXPECT_EQ(result.value(), "value_300")
+        << "错误：txId=400应该看到'value_300'，实际: " << result.value();
+    std::print("  txId=400 -> 期望: value_300, 实际: {} ✓\n", result.value());
+  }
 
-      // 执行查询
-      auto result = skiplist->Contain(key, read_tx_id);
+  std::print("=== 测试1完成 ===\n\n");
+}
 
-      // 确定期望结果：查找key_states中事务ID≤read_tx_id的最新记录
-      std::optional<std::string> expected_value;
-      uint64_t                   latest_valid_tx_id = 0;
+// ==================== 测试2：MVCC删除可见性 ====================
+TEST_F(SkiplistTest, MVCCDeleteVisibility) {
+  std::print("=== 测试2：MVCC删除可见性 ===\n");
 
-      if (key_states.find(key) != key_states.end()) {
-        const auto& [value, tx_id] = key_states[key];
-        if (tx_id <= read_tx_id) {
-          // 只有在事务ID小于等于查询事务ID且值非空时才可见
-          if (!value.empty()) {
-            expected_value     = value;
-            latest_valid_tx_id = tx_id;
-          }
+  const std::string key = "test_key_delete";
+
+  // 插入不同事务ID的版本
+  // 版本1: txId=100, value="value_100"
+  EXPECT_TRUE(skiplist->Insert(key, "value_100", 100));
+
+  // 版本2: txId=200, value="value_200"
+  EXPECT_TRUE(skiplist->Insert(key, "value_200", 200));
+
+  // 版本3: txId=300, 删除标记（空值）
+  EXPECT_TRUE(skiplist->Insert(key, "", 300));
+
+  // 版本4: txId=400, 重新插入
+  EXPECT_TRUE(skiplist->Insert(key, "value_400", 400));
+
+  std::print("插入完成: key={} 有4个版本 (插入→更新→删除→重新插入)\n", key);
+
+  // ============ 验证MVCC可见性（包含删除） ============
+
+  // 测试1: txId=250时，应该看到版本2（删除之前）
+  {
+    auto result = skiplist->Contain(key, 250);
+    EXPECT_TRUE(result.has_value());
+    EXPECT_EQ(result.value(), "value_200")
+        << "错误：txId=250应该看到'value_200'，实际: " << result.value();
+    std::print("  txId=250 -> 期望: value_200, 实际: {} ✓\n", result.value());
+  }
+
+  // 测试2: txId=300时，应该看到删除（空值）
+  {
+    auto result = skiplist->Contain(key, 300);
+    EXPECT_FALSE(result.has_value())  // 删除标记应该返回空
+        << "错误：txId=300应该看到删除（空），实际: " << result.value();
+    std::print("  txId=300 -> 期望: [空], 实际: [空] ✓\n");
+  }
+
+  // 测试3: txId=350时，应该看到删除（空值）
+  {
+    auto result = skiplist->Contain(key, 350);
+    EXPECT_FALSE(result.has_value()) << "错误：txId=350应该看到删除（空），实际: "
+                                     << (result.has_value() ? result.value() : "[空]");
+    std::print("  txId=350 -> 期望: [空], 实际: [空] ✓\n");
+  }
+
+  // 测试4: txId=400时，应该看到重新插入的值
+  {
+    auto result = skiplist->Contain(key, 400);
+    EXPECT_TRUE(result.has_value());
+    EXPECT_EQ(result.value(), "value_400")
+        << "错误：txId=400应该看到'value_400'，实际: " << result.value();
+    std::print("  txId=400 -> 期望: value_400, 实际: {} ✓\n", result.value());
+  }
+
+  // 测试5: txId=500时，应该看到重新插入的值
+  {
+    auto result = skiplist->Contain(key, 500);
+    EXPECT_TRUE(result.has_value());
+    EXPECT_EQ(result.value(), "value_400")
+        << "错误：txId=500应该看到'value_400'，实际: " << result.value();
+    std::print("  txId=500 -> 期望: value_400, 实际: {} ✓\n", result.value());
+  }
+
+  std::print("=== 测试2完成 ===\n\n");
+}
+
+// ==================== 测试3：多key MVCC可见性 ====================
+TEST_F(SkiplistTest, MultipleKeysMVCCVisibility) {
+  std::print("=== 测试3：多key MVCC可见性 ===\n");
+
+  // 为多个key创建不同的版本历史
+  struct KeyVersion {
+    std::string                                   key;
+    std::vector<std::pair<uint64_t, std::string>> versions;  // (txId, value)
+  };
+
+  std::vector<KeyVersion> testKeys = {
+      {"key1", {{100, "v1_100"}, {200, "v1_200"}, {300, ""}, {400, "v1_400"}}},
+      {"key2", {{150, "v2_150"}, {250, "v2_250"}, {350, "v2_350"}}},
+      {"key3", {{120, "v3_120"}, {220, "v3_220"}, {320, "v3_320"}, {420, ""}}},
+  };
+
+  // 插入所有版本
+  for (const auto& keyVer : testKeys) {
+    for (const auto& [txId, value] : keyVer.versions) {
+      EXPECT_TRUE(skiplist->Insert(keyVer.key, value, txId));
+    }
+    std::print("插入key={}: {}个版本\n", keyVer.key, keyVer.versions.size());
+  }
+
+  // ============ 测试不同事务时间点的全局快照 ============
+  std::print("\n测试不同事务时间点的全局快照:\n");
+
+  // 定义测试时间点和期望结果
+  struct SnapshotTest {
+    uint64_t                                                    txId;
+    std::unordered_map<std::string, std::optional<std::string>> expected;  // key -> value/nullopt
+  };
+
+  std::vector<SnapshotTest> snapshotTests = {
+      // txId=90: 所有key都不可见
+      {90, {{"key1", std::nullopt}, {"key2", std::nullopt}, {"key3", std::nullopt}}},
+
+      // txId=110: key1:v1_100, key2:空, key3:v3_120
+      {110, {{"key1", "v1_100"}, {"key2", std::nullopt}, {"key3", std::nullopt}}},
+
+      // txId=180: key1:v1_100, key2:v2_150, key3:v3_120
+      {180, {{"key1", "v1_100"}, {"key2", "v2_150"}, {"key3", "v3_120"}}},
+
+      // txId=250: key1:v1_200, key2:v2_250, key3:v3_220
+      {250, {{"key1", "v1_200"}, {"key2", "v2_250"}, {"key3", "v3_220"}}},
+
+      // txId=320: key1:空(删除), key2:v2_350, key3:v3_320
+      {320, {{"key1", std::nullopt}, {"key2", "v2_250"}, {"key3", "v3_320"}}},
+
+      // txId=450: key1:v1_400, key2:v2_350, key3:空(删除)
+      {450, {{"key1", "v1_400"}, {"key2", "v2_350"}, {"key3", std::nullopt}}},
+  };
+
+  size_t totalTests  = 0;
+  size_t passedTests = 0;
+
+  for (const auto& snapshot : snapshotTests) {
+    std::print("\n测试全局快照 txId={}:\n", snapshot.txId);
+
+    for (const auto& [key, expectedValue] : snapshot.expected) {
+      totalTests++;
+
+      auto actual = skiplist->Contain(key, snapshot.txId);
+
+      if (expectedValue.has_value()) {
+        // 期望有值
+        if (actual.has_value() && actual.value() == expectedValue.value()) {
+          passedTests++;
+          std::print("  key={}: 期望 {}, 实际 {} ✓\n", key, expectedValue.value(), actual.value());
+        } else {
+          std::print("  key={}: 期望 {}, 实际 {} ✗\n", key, expectedValue.value(),
+                     actual.has_value() ? actual.value() : "[空]");
+        }
+      } else {
+        // 期望空值
+        if (!actual.has_value()) {
+          passedTests++;
+          std::print("  key={}: 期望 [空], 实际 [空] ✓\n", key);
+        } else {
+          std::print("  key={}: 期望 [空], 实际 {} ✗\n", key, actual.value());
         }
       }
+    }
+  }
 
-      // 验证结果
-      if (expected_value.has_value()) {
-        EXPECT_TRUE(result.has_value()) << "读操作失败: key=" << key << ", tx_id=" << read_tx_id
-                                        << ", 期望值=" << *expected_value;
-        if (result.has_value()) {
-          read_hits++;
-          EXPECT_EQ(*result, *expected_value) << "值不匹配: key=" << key;
-        }
+  std::print("\n全局快照测试结果: {}/{} 通过\n", passedTests, totalTests);
+  EXPECT_EQ(passedTests, totalTests) << "全局快照测试失败";
+
+  std::print("=== 测试3完成 ===\n\n");
+}
+
+// ==================== 测试4：复杂版本交错测试 ====================
+TEST_F(SkiplistTest, ComplexVersionInterleaving) {
+  std::print("=== 测试4：复杂版本交错测试 ===\n");
+
+  // 创建多个key，交错插入版本，模拟真实事务交错
+  const std::vector<std::string> keys = {"A", "B", "C", "D", "E"};
+
+  // 按事务ID顺序执行的操作列表: (txId, key, value)
+  std::vector<std::tuple<uint64_t, std::string, std::string>> operations = {
+      // 第一批操作
+      {100, "A", "A_v100"},
+      {150, "B", "B_v150"},
+      {200, "C", "C_v200"},
+      {250, "D", "D_v250"},
+      {300, "E", "E_v300"},
+
+      // 第二批操作（更新）
+      {350, "A", "A_v350"},
+      {400, "C", "C_v400"},
+      {450, "E", ""},  // 删除E
+
+      // 第三批操作（更多更新）
+      {500, "B", "B_v500"},
+      {550, "D", ""},  // 删除D
+      {600, "A", ""},  // 删除A
+
+      // 第四批操作（重新插入）
+      {650, "A", "A_v650"},
+      {700, "D", "D_v700"},
+  };
+
+  // 执行所有操作
+  for (const auto& [txId, key, value] : operations) {
+    EXPECT_TRUE(skiplist->Insert(key, value, txId));
+  }
+
+  std::print("执行了{}个操作，涉及{}个key\n", operations.size(), keys.size());
+
+  // ============ 验证关键时间点的状态 ============
+  std::print("\n验证关键时间点的状态:\n");
+
+  // 测试点1: txId=325（第一和第二批次之间）
+  {
+    uint64_t testTxId = 325;
+    std::print("\ntxId={}:\n", testTxId);
+
+    std::unordered_map<std::string, std::optional<std::string>> expected = {
+        {"A", "A_v100"}, {"B", "B_v150"}, {"C", "C_v200"}, {"D", "D_v250"}, {"E", "E_v300"},
+    };
+
+    for (const auto& key : keys) {
+      auto actual        = skiplist->Contain(key, testTxId);
+      auto expectedValue = expected[key];
+
+      if (expectedValue.has_value()) {
+        EXPECT_TRUE(actual.has_value());
+        EXPECT_EQ(actual.value(), expectedValue.value());
+        std::print("  key={}: 期望 {}, 实际 {} ✓\n", key, expectedValue.value(), actual.value());
       } else {
-        EXPECT_FALSE(result.has_value())
-            << "读操作失败: key=" << key << ", tx_id=" << read_tx_id << ", 期望为空";
+        EXPECT_FALSE(actual.has_value());
+        std::print("  key={}: 期望 [空], 实际 [空] ✓\n", key);
       }
-
-      reads++;
-
-    } else if (op_type < READ_RATIO + WRITE_RATIO) {
-      // ============ 写操作测试 ============
-      // 目标：测试插入/更新功能，使用新的事务ID
-
-      std::string new_value = std::format("updated_{:08}", op_idx);
-      uint64_t    new_tx_id = current_tx_id++;
-
-      // 执行写入
-      bool success = skiplist->Insert(key, new_value, new_tx_id);
-      EXPECT_TRUE(success) << "写操作失败: key=" << key;
-
-      // 更新状态跟踪
-      key_states[key] = {new_value, new_tx_id};
-
-      writes++;
-      if (success)
-        write_success++;
-
-    } else {
-      // ============ 删除操作测试 ============
-      // 目标：测试MVCC删除（插入空值墓碑）
-
-      uint64_t delete_tx_id = current_tx_id++;
-
-      // 执行删除（插入空值）
-      bool success = skiplist->Insert(key, "", delete_tx_id);
-      EXPECT_TRUE(success) << "删除操作失败: key=" << key;
-
-      // 更新状态跟踪：记录空值作为删除标记
-      key_states[key] = {"", delete_tx_id};
-
-      deletes++;
-      if (success)
-        delete_success++;
-    }
-
-    // 进度显示
-    if ((op_idx + 1) % 10000 == 0) {
-      std::print("   进度: {}/{} 次操作\n", op_idx + 1, TOTAL_OPS);
     }
   }
 
-  auto end_time = std::chrono::high_resolution_clock::now();
-  auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+  // 测试点2: txId=475（第二和第三批次之间）
+  {
+    uint64_t testTxId = 475;
+    std::print("\ntxId={}:\n", testTxId);
 
-  // ============ 第三阶段：结果统计 ============
-  std::print("\n3. 测试结果统计:\n");
-  std::print("   总耗时: {} µs ({:.3f} ms)\n", duration.count(), duration.count() / 1000.0);
-  std::print("   吞吐量: {:.0f} 操作/秒\n",
-             static_cast<double>(TOTAL_OPS) / duration.count() * 1e6);
+    std::unordered_map<std::string, std::optional<std::string>> expected = {
+        {"A", "A_v350"}, {"B", "B_v150"},     {"C", "C_v400"},
+        {"D", "D_v250"}, {"E", std::nullopt},  // 已删除
+    };
 
-  std::print("\n   操作分布:\n");
-  std::print("   读操作: {} ({:.1f}%), 命中: {} ({:.1f}%)\n", reads,
-             static_cast<double>(reads) / TOTAL_OPS * 100, read_hits,
-             reads > 0 ? static_cast<double>(read_hits) / reads * 100 : 0.0);
-  std::print("   写操作: {} ({:.1f}%), 成功: {} ({:.1f}%)\n", writes,
-             static_cast<double>(writes) / TOTAL_OPS * 100, write_success,
-             writes > 0 ? static_cast<double>(write_success) / writes * 100 : 0.0);
-  std::print("   删除操作: {} ({:.1f}%), 成功: {} ({:.1f}%)\n", deletes,
-             static_cast<double>(deletes) / TOTAL_OPS * 100, delete_success,
-             deletes > 0 ? static_cast<double>(delete_success) / deletes * 100 : 0.0);
+    for (const auto& key : keys) {
+      auto actual        = skiplist->Contain(key, testTxId);
+      auto expectedValue = expected[key];
 
-  // ============ 第四阶段：最终状态验证 ============
-  std::print("\n4. 最终状态验证:\n");
-
-  // 验证跳表统计数据
-  std::print("   跳表节点数: {} (包含所有版本和墓碑)\n", skiplist->getnodecount());
-  std::print("   跳表大小: {} bytes\n", skiplist->get_size());
-
-  // 验证key_states中的每个key在跳表中的最新状态
-  size_t verification_passed = 0;
-  size_t verification_failed = 0;
-
-  for (const auto& [key, state] : key_states) {
-    const auto& [expected_value, tx_id] = state;
-
-    // 使用最新的事务ID查询，应该能看到最新状态
-    auto result = skiplist->Contain(key, tx_id);
-
-    if (expected_value.empty()) {
-      // 期望是删除状态（空值）
-      EXPECT_FALSE(result.has_value()) << "验证失败: key=" << key << " 应该被删除";
-      if (result.has_value()) {
-        verification_failed++;
+      bool passed = false;
+      if (expectedValue.has_value()) {
+        passed = actual.has_value() && actual.value() == expectedValue.value();
+        std::print("  key={}: 期望 {}, 实际 {} {}\n", key, expectedValue.value(),
+                   actual.has_value() ? actual.value() : "[空]", passed ? "✓" : "✗");
       } else {
-        verification_passed++;
+        passed = !actual.has_value();
+        std::print("  key={}: 期望 [空], 实际 [空] {}\n", key, passed ? "✓" : "✗");
       }
-    } else {
-      // 期望有值
-      EXPECT_TRUE(result.has_value()) << "验证失败: key=" << key << " 应该有值";
-      if (result.has_value()) {
-        EXPECT_EQ(*result, expected_value) << "验证失败: key=" << key << " 值不匹配";
-        verification_passed++;
+
+      EXPECT_TRUE(passed);
+    }
+  }
+
+  // 测试点3: txId=625（第三和第四批次之间）
+  {
+    uint64_t testTxId = 625;
+    std::print("\ntxId={}:\n", testTxId);
+
+    std::unordered_map<std::string, std::optional<std::string>> expected = {
+        {"A", std::nullopt},                                        // 已删除
+        {"B", "B_v500"},     {"C", "C_v400"}, {"D", std::nullopt},  // 已删除
+        {"E", std::nullopt},                                        // 已删除
+    };
+
+    for (const auto& key : keys) {
+      auto actual        = skiplist->Contain(key, testTxId);
+      auto expectedValue = expected[key];
+
+      bool passed = false;
+      if (expectedValue.has_value()) {
+        passed = actual.has_value() && actual.value() == expectedValue.value();
+        std::print("  key={}: 期望 {}, 实际 {} {}\n", key, expectedValue.value(),
+                   actual.has_value() ? actual.value() : "[空]", passed ? "✓" : "✗");
       } else {
-        verification_failed++;
+        passed = !actual.has_value();
+        std::print("  key={}: 期望 [空], 实际 {} {}\n", key,
+                   actual.has_value() ? actual.value() : "[空]", passed ? "✓" : "✗");
       }
+
+      EXPECT_TRUE(passed);
     }
   }
 
-  std::print("   状态验证: {} 通过, {} 失败\n", verification_passed, verification_failed);
+  // 测试点4: txId=750（所有操作之后）
+  {
+    uint64_t testTxId = 750;
+    std::print("\ntxId={}:\n", testTxId);
 
-  // ============ 第五阶段：随机抽样验证 ============
-  std::print("\n5. 随机抽样验证:\n");
+    std::unordered_map<std::string, std::optional<std::string>> expected = {
+        {"A", "A_v650"}, {"B", "B_v500"},     {"C", "C_v400"},
+        {"D", "D_v700"}, {"E", std::nullopt},  // 已删除
+    };
 
-  constexpr size_t                        SAMPLE_SIZE = 100;
-  std::uniform_int_distribution<size_t>   sample_key_dist(0, key_states.size() - 1);
-  std::uniform_int_distribution<uint64_t> sample_tx_dist(INITIAL_TX_ID, current_tx_id - 1);
+    for (const auto& key : keys) {
+      auto actual        = skiplist->Contain(key, testTxId);
+      auto expectedValue = expected[key];
 
-  // 将key_states的key转换为vector以便随机访问
-  std::vector<std::string> all_keys;
-  for (const auto& [key, _] : key_states) {
-    all_keys.push_back(key);
-  }
-
-  size_t sample_passed = 0;
-
-  for (size_t i = 0; i < SAMPLE_SIZE && i < all_keys.size(); ++i) {
-    size_t             idx          = sample_key_dist(rng);
-    const std::string& key          = all_keys[idx];
-    uint64_t           sample_tx_id = sample_tx_dist(rng);
-
-    // 查询
-    auto result = skiplist->Contain(key, sample_tx_id);
-
-    // 确定期望值：查找key_states中事务ID≤sample_tx_id的最新记录
-    std::optional<std::string> expected_value;
-
-    if (key_states.find(key) != key_states.end()) {
-      const auto& [value, tx_id] = key_states[key];
-      if (tx_id <= sample_tx_id && !value.empty()) {
-        expected_value = value;
-
-        // 检查是否有更早的版本
-        // 注意：这里简化了，实际可能需要检查所有≤sample_tx_id的版本
+      bool passed = false;
+      if (expectedValue.has_value()) {
+        passed = actual.has_value() && actual.value() == expectedValue.value();
+        std::print("  key={}: 期望 {}, 实际 {} {}\n", key, expectedValue.value(),
+                   actual.has_value() ? actual.value() : "[空]", passed ? "✓" : "✗");
+      } else {
+        passed = !actual.has_value();
+        std::print("  key={}: 期望 [空], 实际 {} {}\n", key,
+                   actual.has_value() ? actual.value() : "[空]", passed ? "✓" : "✗");
       }
-    }
 
-    // 验证
-    bool passed = false;
-    if (expected_value.has_value()) {
-      passed = result.has_value() && *result == *expected_value;
-    } else {
-      passed = !result.has_value();
-    }
-
-    if (passed) {
-      sample_passed++;
+      EXPECT_TRUE(passed);
     }
   }
 
-  std::print("   随机抽样: {}/{} 通过 ({:.1f}%)\n", sample_passed, SAMPLE_SIZE,
-             static_cast<double>(sample_passed) / SAMPLE_SIZE * 100);
+  std::print("\n=== 测试4完成 ===\n\n");
+}
 
-  // ============ 测试断言 ============
-  EXPECT_GT(reads, 0) << "应该执行了读操作";
-  EXPECT_GT(writes, 0) << "应该执行了写操作";
-  EXPECT_GT(deletes, 0) << "应该执行了删除操作";
-  EXPECT_EQ(verification_failed, 0) << "最终状态验证应该全部通过";
-  EXPECT_GT(sample_passed, SAMPLE_SIZE * 0.9) << "随机抽样通过率应高于90%";
+// ==================== 测试5：边界条件测试 ====================
+TEST_F(SkiplistTest, EdgeCases) {
+  std::print("=== 测试5：边界条件测试 ===\n");
 
-  std::print("\n=== 测试完成 ===\n");
+  // 测试1: 完全不存在的key
+  {
+    auto result = skiplist->Contain("nonexistent_key", 1000);
+    EXPECT_FALSE(result.has_value());
+    std::print("不存在的key -> 期望 [空], 实际 [空] ✓\n");
+  }
+  // 测试3: 相同事务ID的多个插入（后插入的覆盖前面的）
+  {
+    const std::string key = "same_tx_key";
+
+    EXPECT_TRUE(skiplist->Insert(key, "first", 100));
+    EXPECT_TRUE(skiplist->Insert(key, "second", 100));  // 相同txId
+    EXPECT_TRUE(skiplist->Insert(key, "third", 100));   // 相同txId
+
+    // 查询txId=100应该看到最后一个插入的值
+    auto result = skiplist->Contain(key, 100);
+    EXPECT_TRUE(result.has_value());
+    EXPECT_EQ(result.value(), "third");
+    std::print("相同txId多次插入 -> 期望 third, 实际 {} ✓\n", result.value());
+
+    // 查询txId=99应该看不到
+    result = skiplist->Contain(key, 99);
+    EXPECT_FALSE(result.has_value());
+    std::print("相同txId多次插入(txId=99) -> 期望 [空], 实际 [空] ✓\n");
+  }
+
+  // 测试4: 仅删除标记的key
+  {
+    const std::string key = "only_deleted_key";
+
+    EXPECT_TRUE(skiplist->Insert(key, "", 100));  // 只有删除标记
+
+    // 任何大于等于100的事务ID都应该看到空
+    auto result = skiplist->Contain(key, 100);
+    EXPECT_FALSE(result.has_value());
+    std::print("只有删除标记(txId=100) -> 期望 [空], 实际 [空] ✓\n");
+
+    result = skiplist->Contain(key, 200);
+    EXPECT_FALSE(result.has_value());
+    std::print("只有删除标记(txId=200) -> 期望 [空], 实际 [空] ✓\n");
+
+    // 小于100的事务ID应该看不到
+    result = skiplist->Contain(key, 99);
+    EXPECT_FALSE(result.has_value());
+    std::print("只有删除标记(txId=99) -> 期望 [空], 实际 [空] ✓\n");
+  }
+
+  // 测试5: 事务ID为0的情况
+  {
+    const std::string key = "zero_tx_key";
+
+    EXPECT_TRUE(skiplist->Insert(key, "value_at_zero", 0));
+
+    auto result = skiplist->Contain(key, 0);
+    EXPECT_TRUE(result.has_value());
+    EXPECT_EQ(result.value(), "value_at_zero");
+    std::print("txId=0插入并查询 -> 期望 value_at_zero, 实际 {} ✓\n", result.value());
+
+    result = skiplist->Contain(key, 1);
+    EXPECT_TRUE(result.has_value());
+    EXPECT_EQ(result.value(), "value_at_zero");
+    std::print("txId=1查询 -> 期望 value_at_zero, 实际 {} ✓\n", result.value());
+  }
+
+  std::print("=== 测试5完成 ===\n\n");
+}
+
+// ==================== 主函数 ====================
+int main(int argc, char** argv) {
+  testing::InitGoogleTest(&argc, argv);
+
+  std::print("=========================================\n");
+  std::print("     MVCC可见性验证测试套件\n");
+  std::print("=========================================\n\n");
+
+  return RUN_ALL_TESTS();
 }
