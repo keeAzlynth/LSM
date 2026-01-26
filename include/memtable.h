@@ -49,6 +49,8 @@ class MemTable {
 
  public:
   MemTable();
+  MemTable(const MemTable& other)            = delete;
+  MemTable& operator=(const MemTable& other) = delete;
   ~MemTable();
 
   void put(const std::string& key, const std::string& value, const uint64_t transaction_id = 0);

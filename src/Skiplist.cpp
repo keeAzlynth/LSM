@@ -166,6 +166,10 @@ std::shared_ptr<Node> Skiplist::Get(const std::string& key, const uint64_t trans
     if (transaction_id == 0) {
       return current->forward[0];
     } else {
+      while (current->forward[0] && cmp(current->forward[0]->key_, key) == 0 &&
+             current->forward[0]->transaction_id > transaction_id) {
+        current = current->forward[0];
+      }
       if (current->forward[0] && cmp(current->forward[0]->key_, key) == 0 &&
           (!current->forward[0]->value_.empty())) {
         return current->forward[0];
@@ -230,7 +234,7 @@ SkiplistIterator Skiplist::prefix_serach_begin(const std::string& key) {
   return SkiplistIterator(nullptr);
 }
 SkiplistIterator Skiplist::prefix_serach_end(const std::string& key) {
-  auto Newkey  = key + '\xff';
+  auto Newkey  = key + '\xFF';
   auto current = head;
   for (int i = current_level - 1; i >= 0; --i) {
     while (current->forward[i] && cmp(current->forward[i]->key_, Newkey) == -1) {

@@ -1,8 +1,6 @@
 #include "../include/memtable.h"
-#include <memory>
-#include <mutex>
-#include <optional>
-#include <string>
+#include <spdlog/logger.h>
+#include "spdlog/spdlog.h"
 #include <utility>
 bool operator==(const MemTableIterator& lhs, const MemTableIterator& rhs) noexcept {
   if (lhs.queue_.empty() || rhs.queue_.empty()) {
@@ -58,6 +56,7 @@ MemTableIterator& MemTableIterator::operator++() {
     return *this;
   }
   auto temp = queue_.top().key_;
+  queue_.pop();
   while (!queue_.empty() && queue_.top().key_ == temp) {
     queue_.pop();
   }
@@ -119,7 +118,7 @@ void MemTableIterator::skip_transaction_id() {
   if (max_transaction_id == 0) {
     return;
   }
-  while (!queue_.empty() && queue_.top().transaction_id_ <= max_transaction_id) {
+  while (!queue_.empty() && queue_.top().transaction_id_ > max_transaction_id) {
     queue_.pop();
   }
 }
@@ -130,7 +129,7 @@ bool MemTableIterator::top_value_legal() const {
   if (max_transaction_id == 0) {
     return !queue_.top().value_.empty();
   }
-  if (queue_.top().transaction_id_ < max_transaction_id) {
+  if (queue_.top().transaction_id_ <= max_transaction_id) {
     return !queue_.top().value_.empty();
   } else {
     return false;
@@ -220,6 +219,7 @@ SkiplistIterator MemTable::get_mutex(const std::string& key, std::vector<std::st
 std::vector<std::tuple<std::string, std::optional<std::string>, std::optional<uint64_t>>>
 MemTable::get_batch(const std::vector<std::string>& key_pairs, const uint64_t transaction_id) {
   std::vector<std::tuple<std::string, std::optional<std::string>, std::optional<uint64_t>>> result;
+  result.reserve(key_pairs.size());
   for (const auto& pair : key_pairs) {
     auto value = get(pair, transaction_id);
     if (value.has_value()) {  // 添加空值检查
@@ -320,10 +320,15 @@ MemTableIterator MemTable::prefix_serach(const std::string& key, const uint64_t 
   std::vector<SerachIterator>         iter;
   std::shared_lock<std::shared_mutex> lock(cur_lock_);
   if (!current_table) {
-    throw std::runtime_error("current_table is null");
+    spdlog::info("current_table is null");
+    return MemTableIterator(iter, transaction_id);
   }
-  for (auto begin = current_table->prefix_serach_begin(key);
-       begin != current_table->prefix_serach_end(key); ++begin) {
+  auto begin_iter = current_table->prefix_serach_begin(key);
+  auto end_iter   = current_table->prefix_serach_end(key);
+  if (!begin_iter.valid()) {
+    return MemTableIterator(iter, transaction_id);
+  }
+  for (auto begin = begin_iter; begin != end_iter; ++begin) {
     iter.push_back(
         SerachIterator(begin.getValue().first, begin.getValue().second, transaction_id, 0, 0));
   }
