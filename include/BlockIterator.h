@@ -8,11 +8,9 @@
 
 class Block;
 class BlockIterator;
-bool operator==(const BlockIterator& lhs, const BlockIterator& rhs) noexcept;
 
 class BlockIterator {
  public:
-  friend bool operator==(const BlockIterator& lhs, const BlockIterator& rhs) noexcept;
   // 标准迭代器类型定义
   using iterator_category = std::forward_iterator_tag;
   using value_type        = std::pair<std::string, std::string>;
@@ -31,14 +29,15 @@ class BlockIterator {
   bool is_end();
 
   // 迭代器操作
-  con_pointer    operator->();
-  BlockIterator& operator++();
-  BlockIterator  operator++(int) = delete;
-  value_type     operator*();
-
+  con_pointer            operator->();
+  BlockIterator&         operator++();
+  BlockIterator          operator++(int) = delete;
+  value_type             operator*();
+  bool                   operator==(const BlockIterator& rhs) const;
   auto                   operator<=>(const BlockIterator& rhs) const -> std::strong_ordering;
   value_type             getValue() const;
   size_t                 getIndex() const;
+  uint64_t               get_cur_tranc_id() const;
   std::shared_ptr<Block> get_block() const;
 
  private:

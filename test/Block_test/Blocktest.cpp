@@ -1,9 +1,11 @@
 #include "../../include/Block.h"
 #include "../../include/BlockIterator.h"
 #include <gtest/gtest.h>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <iostream>
+#include <tuple>
 
 class BlockTest : public ::testing::Test {
  protected:
@@ -171,7 +173,7 @@ TEST_F(BlockTest, RangeSearch) {
 
   try {
     // 测试范围查询
-    auto range_iterators = block->get_prefix_iterator("key1", 0);
+    auto range_iterators = block->get_prefix_iterator("key1");
     ASSERT_TRUE(range_iterators.has_value()) << "Range iterators should not be null";
 
     auto begin = range_iterators->first;
@@ -187,7 +189,7 @@ TEST_F(BlockTest, RangeSearch) {
       retrieved_data.push_back(entry);
       ++(*begin);
     }
-    auto range_iterators2 = block->get_prefix_iterator("key9", 0);
+    auto range_iterators2 = block->get_prefix_iterator("key9");
     ASSERT_TRUE(range_iterators2.has_value()) << "Range iterators should not be null";
 
     auto begin2 = range_iterators2->first;
@@ -220,7 +222,7 @@ TEST_F(BlockTest, RangeSearch) {
         {"key9", "value9"},
     };
 
-    ASSERT_EQ(retrieved_data.size(), expected_data.size()) << "Retrieved data size mismatch";
+    ASSERT_EQ(retrieved_data2.size(), expected_data2.size()) << "Retrieved data2 size mismatch";
 
     for (size_t i = 0; i < expected_data2.size(); ++i) {
       EXPECT_EQ(retrieved_data2[i].first, expected_data2[i].first)
@@ -229,6 +231,58 @@ TEST_F(BlockTest, RangeSearch) {
           << "Value mismatch at position " << i;
     }
 
+  } catch (const std::exception& e) {
+    FAIL() << "Unexpected exception: " << e.what();
+  }
+}
+
+TEST_F(BlockTest, RangeSearchandMVCC) {
+  // 添加多组测试数据
+  const std::vector<std::tuple<std::string, std::string, uint64_t>> test_data = {
+      {"key1", "value1", 100},   {"key10", "value10", 120}, {"key11", "value11", 80},
+      {"key12", "value12", 150}, {"key4", "value4", 60},    {"key5", "value5", 92},
+      {"key6", "value6", 73},    {"key7", "value7", 110},   {"key8", "value8", 98},
+      {"key9", "value9", 90},    {"key99", "value99", 99}};
+
+  // 插入测试数据
+  for (const auto& [key, value, tranc_id] : test_data) {
+    ASSERT_TRUE(block->add_entry(key, value, tranc_id)) << "Failed to add entry: " << key;
+  }
+
+  try {
+    // 测试范围查询
+    auto range_iterators  = block->get_prefix_tran_id("key1", 120);
+    auto range_iterators2 = block->get_prefix_tran_id("key9", 90);
+
+    // 验证范围内的键值对
+    const std::vector<std::tuple<std::string, std::string, uint64_t>> expected_data = {
+        {"key1", "value1", 100},
+        {"key10", "value10", 120},
+        {"key11", "value11", 80},
+    };
+
+    ASSERT_EQ(range_iterators.size(), expected_data.size()) << "Retrieved data size mismatch";
+
+    for (size_t i = 0; i < expected_data.size(); ++i) {
+      EXPECT_EQ(std::get<0>(range_iterators[i]), std::get<0>(expected_data[i]))
+          << "Key mismatch at position " << i;
+      EXPECT_EQ(std::get<1>(range_iterators[i]), std::get<1>(expected_data[i]))
+          << "Value mismatch at position " << i;
+      EXPECT_EQ(std::get<2>(range_iterators[i]), std::get<2>(expected_data[i]))
+          << "trans_id mismatch at position " << i;
+    }
+    const std::vector<std::tuple<std::string, std::string, uint64_t>> expected_data2 = {
+        {"key9", "value9", 90}};
+
+    ASSERT_EQ(range_iterators2.size(), expected_data2.size()) << "Retrieved data2 size mismatch";
+    for (size_t i = 0; i < expected_data2.size(); ++i) {
+      EXPECT_EQ(std::get<0>(range_iterators2[i]), std::get<0>(expected_data2[i]))
+          << "Key mismatch at position " << i;
+      EXPECT_EQ(std::get<1>(range_iterators2[i]), std::get<1>(expected_data2[i]))
+          << "Value mismatch at position " << i;
+      EXPECT_EQ(std::get<2>(range_iterators2[i]), std::get<2>(expected_data2[i]))
+          << "trans_id mismatch at position " << i;
+    }
   } catch (const std::exception& e) {
     FAIL() << "Unexpected exception: " << e.what();
   }

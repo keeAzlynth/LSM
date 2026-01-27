@@ -1,13 +1,9 @@
 #include "../include/BlockIterator.h"
 #include "../include/Block.h"
+#include <iostream>
 #include <optional>
-#include <print>
 #include <utility>
 
-bool operator==(const BlockIterator& lhs, const BlockIterator& rhs) noexcept {
-  return lhs.block == rhs.block && lhs.current_index == rhs.current_index &&
-         lhs.tranc_id_ == rhs.tranc_id_;
-}
 BlockIterator::BlockIterator() : block(nullptr), current_index(0), tranc_id_(0) {}
 BlockIterator::BlockIterator(std::shared_ptr<Block> block_, const std::string& key,
                              uint64_t tranc_id)
@@ -27,6 +23,7 @@ BlockIterator::BlockIterator(std::shared_ptr<Block> block_, size_t index, uint64
     : block(block_), current_index(index), tranc_id_(tranc_id) {
   if (should_skip) {
     skip_by_tranc_id();  // 只在需要时跳过
+    update_current();
   }
 }
 
@@ -44,7 +41,7 @@ BlockIterator::con_pointer BlockIterator::operator->() {
   return &(*cached_value);
 }
 BlockIterator& BlockIterator::operator++() {
-  if (block && current_index < block->Offset_.size()) {
+  if (block) {
     current_index++;
     update_current();
     skip_by_tranc_id();  // 跳过不可见的事务
@@ -60,6 +57,11 @@ BlockIterator::value_type BlockIterator::operator*() {
   }
   return *cached_value;
 }
+
+bool BlockIterator::operator==(const BlockIterator& other) const {
+  return block == other.block && current_index == other.current_index &&
+         tranc_id_ == other.tranc_id_;
+}
 auto BlockIterator::operator<=>(const BlockIterator& other) const -> std::strong_ordering {
   if (block != other.block) {
     return block <=> other.block;
@@ -72,15 +74,18 @@ auto BlockIterator::operator<=>(const BlockIterator& other) const -> std::strong
 
 BlockIterator::value_type BlockIterator::getValue() const {
   if (current_index < 0 || current_index >= block->Offset_.size()) {
+    std::cout << current_index;
     throw std::out_of_range("Index out of range in BlockIterator");
   }
-  auto offset = block->Offset_[current_index];
-  auto entry  = block->get_entry(offset);
-  return std::make_pair(entry->key, entry->value);
+  return cached_value.value();
 }
 size_t BlockIterator::getIndex() const {
   return current_index;
 }
+uint64_t BlockIterator::get_cur_tranc_id() const {
+  return tranc_id_;
+}
+
 std::shared_ptr<Block> BlockIterator::get_block() const {
   return block;
 }
@@ -89,12 +94,12 @@ void BlockIterator::update_current() {
   if (block && current_index < block->Offset_.size()) {
     auto offset  = block->Offset_[current_index];
     auto entry   = block->get_entry(offset);
+    tranc_id_    = entry->tranc_id;
     cached_value = std::make_pair(entry->key, entry->value);
   }
 }
 void BlockIterator::skip_by_tranc_id() {
   if (tranc_id_ == 0 || !block) {
-    cached_value = std::nullopt;
     return;
   }
   while (current_index < block->Offset_.size()) {
