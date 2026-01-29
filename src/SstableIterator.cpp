@@ -1,10 +1,9 @@
-#include <cstddef>
-#include <memory>
-#include <optional>
-#include <string>
-#include <utility>
+#include "spdlog/spdlog.h"
+
 #include "../include/Sstable.h"
 #include "../include/SstableIterator.h"
+#include <string>
+#include <tuple>
 
 std::optional<std::pair<SstIterator, SstIterator>> SstIterator::find_prefix_key(
     std::shared_ptr<Sstable> sstable, std::string prefix, uint64_t tranc_id) {
@@ -25,7 +24,7 @@ bool operator==(const SstIterator& rhs, const SstIterator& lhs) noexcept {
 SstIterator::SstIterator() {
   m_sst         = nullptr;
   m_block_it    = nullptr;
-  cached_value  = {"", ""};
+  cached_value  = {std::string(), std::string()};
   m_block_idx   = 0;
   max_tranc_id_ = 0;
 }
@@ -44,25 +43,18 @@ SstIterator::SstIterator(std::shared_ptr<Sstable> sst, const std::string& key, u
   seek(key);
 }
 SstIterator::SstIterator(std::shared_ptr<Sstable> sst, size_t block_idx,
-                         const std::string& key = "", uint64_t tranc_id = 0)
+                         const std::string& key = std::string(), uint64_t tranc_id = 0)
     : m_sst(sst), m_block_idx(block_idx), max_tranc_id_(tranc_id) {
-  if (!m_sst || m_block_idx > m_sst->num_blocks()) {
+  if (!m_sst || !is_block_index_vaild(block_idx)) {
     m_block_it = nullptr;
     return;
-  }
-  if (key == "") {
-    // 如果key为空，直接读取指定的block
-    m_block_it = std::make_shared<BlockIterator>(m_sst->read_block(m_block_idx), 0, tranc_id);
-    if (m_block_it->is_end()) {
-      m_block_it = nullptr;
-    }
   }
   auto block = m_sst->read_block(m_block_idx);
-  if (!block) {
-    m_block_it = nullptr;
+  if (exists_key_prefix(key)) {
+    m_block_it = std::make_shared<BlockIterator>(block, key, tranc_id);
     return;
   }
-  m_block_it = std::make_shared<BlockIterator>(block, key, tranc_id);
+  m_block_it = std::make_shared<BlockIterator>(block, 0, tranc_id);
 }
 
 SstIterator::SstIterator(std::shared_ptr<Sstable> sst, std::shared_ptr<BlockIterator> block_iter,
@@ -87,10 +79,6 @@ void SstIterator::seek(const std::string& key) {
     return;
   }
   m_block_idx = find_result.value();
-  if (m_block_idx >= m_sst->num_blocks()) {
-    set_end();
-    return;
-  }
 
   auto block = m_sst->read_block(m_block_idx);
   if (!block) {
@@ -104,18 +92,24 @@ void SstIterator::seek(const std::string& key) {
     return;
   }
 }
-std::string SstIterator::key() {
+std::string SstIterator::key() const {
   if (!m_block_it) {
-    throw std::runtime_error("Iterator is invalid");
+    spdlog::info("SstIterator::key() BlockIterator is invalid");
+    return std::string();
   }
   return (*m_block_it)->first;
 }
 
-std::string SstIterator::value() {
+std::string SstIterator::value() const {
   if (!m_block_it) {
-    throw std::runtime_error("Iterator is invalid");
+    spdlog::info("SstIterator::value() BlockIterator is invalid");
+    return std::string();
   }
   return (*m_block_it)->second;
+}
+
+std::tuple<std::string, std::string, uint64_t> SstIterator::getValue() const {
+  return std::make_tuple(key(), value(), m_block_it->get_cur_tranc_id());
 }
 
 BaseIterator& SstIterator::operator++() {
@@ -125,11 +119,12 @@ BaseIterator& SstIterator::operator++() {
   ++(*m_block_it);
   if (m_block_it->is_end()) {
     m_block_idx++;
-    if (m_block_idx < m_sst->num_blocks()) {
+    if (is_block_index_vaild(m_block_idx)) {
       // 读取下一个block
       auto          next_block = m_sst->read_block(m_block_idx);
       BlockIterator new_block_it(next_block, 0, max_tranc_id_);
       (*m_block_it) = new_block_it;
+      cached_value  = {key(), value()};
     } else {
       // 没有下一个block
       m_block_it = nullptr;
@@ -139,6 +134,9 @@ BaseIterator& SstIterator::operator++() {
 }
 bool SstIterator::isEnd() {
   return !m_block_it;
+}
+bool SstIterator::is_block_index_vaild(size_t block_index) const {
+  return m_sst->is_block_index_vaild(block_index);
 }
 
 bool SstIterator::exists_key_prefix(std::string key) const {
@@ -171,7 +169,8 @@ auto SstIterator::operator<=>(BaseIterator& rhs) const -> std::strong_ordering {
 
 SstIterator::valuetype SstIterator::operator*() const {
   if (!m_block_it) {
-    throw std::runtime_error("Iterator is invalid");
+    spdlog::info("SstIterator::operator*() Iterator is invalid");
+    return {std::string(), std::string()};
   }
   return (**m_block_it);
 }
@@ -192,7 +191,8 @@ std::shared_ptr<Sstable> SstIterator::get_sstable() const {
 }
 
 void SstIterator::update_current() const {
-  if (!cached_value && m_block_it && !m_block_it->is_end()) {
+  if (valid()) {
     cached_value = **m_block_it;
   }
+  spdlog::info("SstIterator::update_current() invalid");
 }

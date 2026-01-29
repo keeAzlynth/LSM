@@ -1,10 +1,14 @@
 #include "../include/Sstable.h"
 #include "../include/SstableIterator.h"
+#include "spdlog/spdlog.h"
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 #include <print>
@@ -78,8 +82,9 @@ std::shared_ptr<Sstable> Sstable::create_sst_with_meta_only(
 }
 
 std::shared_ptr<Block> Sstable::read_block(size_t block_idx) {
-  if (block_idx >= block_metas.size()) {
-    throw std::out_of_range("Block index out of range");
+  if (is_block_index_vaild(block_idx)) {
+    std::println("Block index out of range {}", block_metas.size());
+    return nullptr;
   }
 
   // 先从缓存中查找
@@ -110,9 +115,9 @@ std::shared_ptr<Block> Sstable::read_block(size_t block_idx) {
   return block_res;
 }
 
-std::optional<size_t> Sstable::find_block_idx(const std::string& key) {
+std::optional<size_t> Sstable::find_block_idx(const std::string& key, bool is_prefix) {
   // 先在布隆过滤器判断key是否存在
-  if (bloom_filter != nullptr && !bloom_filter->possibly_contains(key)) {
+  if (!is_prefix && bloom_filter != nullptr && !bloom_filter->possibly_contains(key)) {
     return std::nullopt;
   }
 
@@ -124,68 +129,31 @@ std::optional<size_t> Sstable::find_block_idx(const std::string& key) {
     size_t      mid  = left + (right - left) / 2;
     const auto& meta = block_metas[mid];
     if (key < meta.first_key_) {
-      right = mid - 1;
+      right = mid;
     } else if (key > meta.last_key_) {
       left = mid + 1;
     } else {
       return mid;
     }
   }
-  if (left >= block_metas.size()) {
-    return std::nullopt;
-  }
-  return left;
+  return std::nullopt;
 }
 
 std::vector<std::shared_ptr<Block>> Sstable::find_block_range(const std::string& key_prefix) {
   std::vector<std::shared_ptr<Block>> result;
-  if (key_prefix < first_key || key_prefix > last_key) {
+  if ((key_prefix < first_key && !first_key.starts_with(key_prefix)) || key_prefix > last_key) {
     return result;  // 前缀超出范围，返回空
-  }
-  int  begin{-1};
-  auto res1 = find_block_idx(key_prefix);
+  };
+  auto res1 = find_block_idx(key_prefix, true);
   if (res1.has_value()) {
-    begin = res1.value();
-    result.push_back(read_block(begin));
-  }
-  size_t left  = 0;
-  size_t right = block_metas.size();
-  if (begin == -1) {
-    // 找到第一个 block：first_key >= key_prefix 的最小 block
-    while (left < right) {
-      size_t      mid  = left + (right - left) / 2;
-      const auto& meta = block_metas[mid];
-      if (meta.last_key_ < key_prefix) {
-        // 整个 block 都小于 key_prefix，往后找
-        left = mid + 1;
-      } else if (meta.first_key_ > key_prefix) {
-        // 整个 block 都大于 key_prefix，往前找
-        right = mid;
-      } else {
-        // block 可能包含 key_prefix 或更大的前缀
-        left = mid;
-        break;
+    result.push_back(read_block(res1.value()));
+    for (int index = res1.value() + 1; index < block_metas.size(); index++) {
+      if (block_metas[index].last_key_ <= key_prefix) {
+        result.push_back(read_block(index));
       }
+      break;
     }
-    if (left < block_metas.size()) {
-      auto new_block = read_block(left);
-      if (new_block->get_prefix_begin_idx_binary(key_prefix)) {
-        begin = left;
-        result.push_back(new_block);
-      }
-    }
-  }
-  if (begin != -1) {
-    auto index = begin;
-    while (index < block_metas.size() - 1) {
-      index++;
-      auto res = read_block(index);
-      if (res->get_prefix_begin_idx_binary(key_prefix).has_value()) {
-        result.push_back(res);
-      } else {
-        return result;
-      }
-    }
+    return result;
   }
   return result;
 }
@@ -210,6 +178,9 @@ std::string Sstable::get_last_key() const {
   return last_key;
 }
 
+bool Sstable::is_block_index_vaild(size_t block_idx) const {
+  return block_idx >= block_metas.size() ? true : false;
+}
 bool Sstable::KeyExists(std::string key) {
   if (key < first_key || key > last_key) {
     return false;
@@ -225,24 +196,29 @@ bool Sstable::KeyExists(std::string key) {
   auto block = read_block(block_idx_opt.value());
   return block->KeyExists(key);
 }
-SstIterator Sstable::get_Iterator(const std::string& key, uint64_t tranc_id) {
-  if (key < first_key || key > last_key) {
-    return this->end();
+SstIterator Sstable::get_Iterator(const std::string& key, uint64_t tranc_id, bool is_prefix) {
+  if (!is_prefix) {
+    if (key < first_key || key > last_key) {
+      return end();
+    }
+    // 在布隆过滤器判断key是否存在
+    if (bloom_filter != nullptr && !bloom_filter->possibly_contains(key)) {
+      return end();
+    }
+    return SstIterator(shared_from_this(), key, tranc_id);
   }
-
-  // 在布隆过滤器判断key是否存在
-  if (bloom_filter != nullptr && !bloom_filter->possibly_contains(key)) {
-    return this->end();
+  if ((key < first_key && !first_key.starts_with(key)) || key > last_key) {
+    return end();
   }
-
   return SstIterator(shared_from_this(), key, tranc_id);
 }
 
 SstIterator Sstable::current_Iterator(size_t block_idx, uint64_t tranc_id) {
   if (block_idx >= block_metas.size()) {
-    throw std::out_of_range("Block index out of range");
+    spdlog::info(
+        "Sstable::current_Iterator(size_t block_idx, uint64_t tranc_id)Block index out of range");
   }
-  return SstIterator(shared_from_this(), block_idx, "", tranc_id);
+  return SstIterator(shared_from_this(), block_idx, std::string(), tranc_id);
 }
 SstIterator Sstable::begin(uint64_t tranc_id) {
   return SstIterator(shared_from_this(), tranc_id);
@@ -259,32 +235,28 @@ std::pair<uint64_t, uint64_t> Sstable::get_tranc_id_range() const {
   return std::make_pair(min_tranc_id, max_tranc_id);
 }
 
-std::vector<std::pair<std::string, std::string>> Sstable::get_prefix_range(const std::string& key,
-                                                                           uint64_t tranc_id) {
-  std::vector<std::pair<std::string, std::string>> res;
-  if (key < first_key || key > last_key) {
-    std::print("Prefix out of range: {} not in [{}, {}]\n", key, first_key, last_key);
+std::vector<std::tuple<std::string, std::string, uint64_t>> Sstable::get_prefix_range(
+    const std::string& key, uint64_t tranc_id) {
+  std::vector<std::tuple<std::string, std::string, uint64_t>> res;
+  if (key > last_key || (key < first_key && !first_key.starts_with(key))) {
+    spdlog::info(
+        "Sstable::get_prefix_range(const std::string& key,uint64_t tranc_id) Prefix out of range: "
+        "{} not in [{}, {}]\n",
+        key, first_key, last_key);
     return res;
   }
 
   auto result = find_block_range(key);
   if (result.empty()) {
-    std::print("No blocks found for prefix: {}\n", key);
+    spdlog::info("No blocks found for prefix: {}\n", key);
     return res;
   }
   for (auto& re : result) {
-    if (!re)
+    if (!re) {
       continue;
-    auto opt_range            = re->get_prefix_iterator(key, tranc_id);
-    auto [begin_ptr, end_ptr] = *opt_range;
-    auto cur                  = begin_ptr;
-    while (*cur != *end_ptr) {
-      // 获取当前项并加入结果
-      auto result = cur->getValue();
-      res.emplace_back(result.first, result.second);
-      // 递增迭代器对象
-      ++(*cur);
     }
+    auto range_res = re->get_prefix_tran_id(key, tranc_id);
+    std::ranges::move(range_res.begin(), range_res.end(), std::back_inserter(res));
   }
   return res;
 }

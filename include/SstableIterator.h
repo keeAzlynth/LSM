@@ -2,10 +2,12 @@
 #include "BlockIterator.h"
 #include "memtable.h"
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -39,16 +41,18 @@ class SstIterator : public BaseIterator {
   static std::optional<std::pair<SstIterator, SstIterator>> find_prefix_key(
       std::shared_ptr<Sstable> sst, std::string prefix, uint64_t tranc_id);
 
-  void          set_end();
-  void          seek(const std::string& key);
-  std::string   key();
-  std::string   value();
-  bool          valid() const override;
-  bool          isEnd() override;
-  bool          exists_key_prefix(std::string key) const;
-  BaseIterator& operator++() override;
-  auto          operator<=>(BaseIterator& rhs) const -> std::strong_ordering;
-  valuetype     operator*() const override;
+  void                                           set_end();
+  void                                           seek(const std::string& key);
+  std::string                                    key() const;
+  std::string                                    value() const;
+  std::tuple<std::string, std::string, uint64_t> getValue() const;
+  bool                                           valid() const override;
+  bool                                           isEnd() override;
+  bool                                           is_block_index_vaild(size_t block_index) const;
+  bool                                           exists_key_prefix(std::string key) const;
+  BaseIterator&                                  operator++() override;
+  auto      operator<=>(BaseIterator& rhs) const -> std::strong_ordering;
+  valuetype operator*() const override;
 
   uint64_t     get_tranc_id() const override;
   IteratorType type() const override;
