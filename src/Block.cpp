@@ -1,11 +1,11 @@
 #include "../include/Block.h"
+#include <spdlog/spdlog.h>
 #include "../include/BlockIterator.h"
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include <optional>
-#include <print>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -49,7 +49,10 @@ std::shared_ptr<Block> Block::decode(const std::vector<uint8_t>& encoded, bool w
 
   // 1. 安全性检查
   if (with_hash && encoded.size() <= sizeof(uint16_t) + sizeof(uint32_t)) {
-    throw std::runtime_error("Encoded data too small");
+    spdlog::info(
+        "Block::decode(const std::vector<uint8_t>& encoded, bool with_hash) Encoded data too "
+        "small");
+    return nullptr;
   }
 
   // 2. 读取元素个数
@@ -87,7 +90,8 @@ std::shared_ptr<Block> Block::decode(const std::vector<uint8_t>& encoded, bool w
 // safe get_key/get_value/get_tranc_id with bounds checks
 std::string Block::get_key(const std::size_t offset) const {
   if (offset > Offset_[Offset_.size() - 1]) {
-    std::print("{} Invaild offset to much{}", offset, Offset_[Offset_.size() - 1]);
+    spdlog::info(" Block::get_key(const std::size_t offset) {} Invaild offset to much{}", offset,
+                 Offset_[Offset_.size() - 1]);
   }
   uint16_t key_len;
   std::memcpy(&key_len, Data_.data() + offset, sizeof(uint16_t));
@@ -97,7 +101,8 @@ std::string Block::get_key(const std::size_t offset) const {
 
 std::string Block::get_value(const std::size_t offset) const {
   if (offset > Offset_[Offset_.size() - 1]) {
-    std::print("{} Invaild offset to much{}", offset, Offset_[Offset_.size() - 1]);
+    spdlog::info(" Block::get_value(const std::size_t offset) {} Invaild offset to much{}", offset,
+                 Offset_[Offset_.size() - 1]);
   }
   uint16_t key_len;
   std::memcpy(&key_len, Data_.data() + offset, sizeof(uint16_t));
@@ -109,7 +114,8 @@ std::string Block::get_value(const std::size_t offset) const {
 }
 std::shared_ptr<Block::Entry> Block::get_entry(std::size_t offset) {
   if (offset > Offset_[Offset_.size() - 1]) {
-    std::print("{} Invaild offset to much{}", offset, Offset_[Offset_.size() - 1]);
+    spdlog::info("Block::get_entry(std::size_t offset) {} Invaild offset to much{}", offset,
+                 Offset_[Offset_.size() - 1]);
   }
   auto key      = get_key(offset);
   auto value    = get_value(offset);
@@ -119,7 +125,8 @@ std::shared_ptr<Block::Entry> Block::get_entry(std::size_t offset) {
 
 std::optional<uint64_t> Block::get_tranc_id(const std::size_t offset) const {
   if (offset > Offset_[Offset_.size() - 1]) {
-    std::print("{} Invaild offset to much{}", offset, Offset_[Offset_.size() - 1]);
+    spdlog::info("Block::get_tranc_id(const std::size_t offset) {} Invaild offset {}", offset,
+                 Offset_[Offset_.size() - 1]);
   }
   uint16_t key_len;
   std::memcpy(&key_len, Data_.data() + offset, sizeof(uint16_t));
@@ -133,7 +140,7 @@ std::optional<uint64_t> Block::get_tranc_id(const std::size_t offset) const {
 }
 std::string Block::get_first_key() {
   if (Offset_.empty()) {
-    return "";
+    return std::string();
   }
   return get_key(Offset_[0]);
 }
@@ -275,7 +282,8 @@ std::vector<std::tuple<std::string, std::string, uint64_t>> Block::get_prefix_tr
 }
 std::optional<size_t> Block::get_offset(const std::size_t index) {
   if (index >= Offset_.size()) {
-    throw std::out_of_range("Index out of range");
+    spdlog::info("Block::get_offset(const std::size_t index) Index out of range");
+    return std::nullopt;
   }
   return Offset_[index];
 }
@@ -298,7 +306,7 @@ bool Block::KeyExists(const std::string& key) {
 
 std::pair<std::string, std::string> Block::get_first_and_last_key() {
   if (Offset_.empty()) {
-    return {"", ""};
+    return {std::string(), std::string()};
   }
   std::string first_key = get_key(Offset_[0]);
   std::string last_key  = get_key(Offset_[Offset_.size() - 1]);
