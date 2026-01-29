@@ -74,11 +74,11 @@ class MemTable {
   void   remove_mutex(const std::string& key, const uint64_t transaction_id = 0);
   void   remove_batch(const std::vector<std::string>& key_pairs, const uint64_t transaction_id = 0);
   bool   IsFull();
-  std::shared_ptr<Skiplist> flush();
-  std::shared_ptr<Skiplist> flushsync();
-  void                      frozen_cur_table();
-  MemTableIterator          begin();
-  MemTableIterator          end();
+  std::shared_ptr<Skiplist>            flush();
+  std::list<std::shared_ptr<Skiplist>> flushsync();
+  void                                 frozen_cur_table();
+  MemTableIterator                     begin();
+  MemTableIterator                     end();
   MemTableIterator prefix_serach(const std::string& key, const uint64_t transaction_id = 0);
   enum class SkiplistStatus {
     kNormal,

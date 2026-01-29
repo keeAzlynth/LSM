@@ -278,25 +278,18 @@ bool MemTable::IsFull() {
 std::shared_ptr<Skiplist> MemTable::flush() {
   std::unique_lock<std::shared_mutex> lock(cur_lock_);
   auto                                new_table = std::make_shared<Skiplist>(MAX_LEVEL);
-  fixed_tables.push_back(std::move(current_table));
-  current_table = std::move(new_table);
+  auto                                temp      = std::move(current_table);
+  current_table                                 = std::move(new_table);
   fixed_bytes += current_table->get_size();
-  if (fixed_tables.size() > Global_::MAX_MEMTABLE_SIZE_PER_TABLE) {
-    auto frozen_memtable = fixed_tables.front();
-    fixed_tables.pop_front();
-    return frozen_memtable;
-  }
-  return std::make_shared<Skiplist>();
+  return temp;
 }
-std::shared_ptr<Skiplist> MemTable::flushsync() {
+std::list<std::shared_ptr<Skiplist>> MemTable::flushsync() {
   std::unique_lock<std::shared_mutex> lock(cur_lock_);
   auto                                new_table = std::make_shared<Skiplist>(MAX_LEVEL);
   fixed_tables.push_back(std::move(current_table));
   current_table = std::move(new_table);
   fixed_bytes += current_table->get_size();
-  auto it = fixed_tables.front();
-  fixed_tables.clear();
-  return it;
+  return fixed_tables;
 }
 void MemTable::frozen_cur_table() {
   std::unique_lock<std::shared_mutex> lock(cur_lock_);
