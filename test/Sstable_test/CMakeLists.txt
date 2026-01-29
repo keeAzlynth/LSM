@@ -4,14 +4,46 @@ project(LSM_Sstable_Test)
 # 设置 C++ 标准
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -g")
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address")
+
+# 选项配置
+option(ENABLE_TSAN "启用 ThreadSanitizer" ON)
+option(ENABLE_VALGRIND "启用 Valgrind 支持" OFF)
+option(ENABLE_ASAN "启用 AddressSanitizer" ON)
+
+# TSAN 配置
+if(ENABLE_TSAN)
+    add_compile_options(-fsanitize=thread -g)
+    add_link_options(-fsanitize=thread)
+endif()
+
+# ASAN 配置
+if(ENABLE_ASAN)
+    add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address)
+endif()
+
+# Valgrind 配置
+if(ENABLE_VALGRIND)
+    add_compile_options(-g -O0)
+endif()
+
+# 检查冲突
+if(ENABLE_TSAN AND ENABLE_VALGRIND)
+    message(FATAL_ERROR "ThreadSanitizer 和 Valgrind 不能同时启用")
+endif()
+
+if(ENABLE_ASAN AND ENABLE_VALGRIND)
+    message(FATAL_ERROR "AddressSanitizer 和 Valgrind 不能同时启用")
+endif()
+
+if(ENABLE_TSAN AND ENABLE_ASAN)
+    message(FATAL_ERROR "ThreadSanitizer 和 AddressSanitizer 不能同时启用")
+endif()
 
 # 查找 GTest 包
 find_package(GTest REQUIRED)
-include_directories(${GTEST_INCLUDE_DIRS})
 
-# 添加源文件
+# 源文件列表
 set(SOURCE_FILES
     ../../src/Sstable.cpp
     ../../src/SstableIterator.cpp
@@ -29,23 +61,38 @@ set(SOURCE_FILES
     ../../src/Global.cpp
 )
 
-# 添加测试文件
+# 创建测试可执行文件
 add_executable(sstable_test
     sstable_test.cpp
     ${SOURCE_FILES}
 )
 
-# 链接 Google Test 和线程库
-target_link_libraries(sstable_test
-    ${GTEST_LIBRARIES}
-    pthread
-)
-
 # 添加头文件路径
-target_include_directories(sstable_test PRIVATE
-    ../../include
+target_include_directories(sstable_test PRIVATE ../../include)
+
+# 链接 Google Test 和线程库（使用现代CMake目标）
+target_link_libraries(sstable_test PRIVATE 
+    GTest::gtest 
+    GTest::gtest_main 
+    pthread
 )
 
 # 启用测试
 enable_testing()
 add_test(NAME sstable_test COMMAND sstable_test)
+
+# 添加 Valgrind 内存检查目标
+if(ENABLE_VALGRIND)
+    find_program(VALGRIND_EXECUTABLE valgrind)
+    if(VALGRIND_EXECUTABLE)
+        add_custom_target(valgrind-check
+            COMMAND ${VALGRIND_EXECUTABLE}
+                --leak-check=full
+                --show-leak-kinds=all
+                --error-exitcode=1
+                ./sstable_test
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+            COMMENT "运行 Valgrind 内存检查"
+        )
+    endif()
+endif()
