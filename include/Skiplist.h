@@ -4,6 +4,7 @@
 #include <concepts>
 #include <ranges>
 #include <memory>
+#include <array>
 #include <optional>
 #include <random>
 #include <shared_mutex>
@@ -12,18 +13,18 @@
 #include <vector>
 #include "../include/Global.h"
 
-const int MAX_LEVEL = 16;
-
 class SkiplistIterator;
 class Node {
  public:
-  std::string                        key_;
-  std::string                        value_;
-  std::vector<std::shared_ptr<Node>> forward;
-  uint64_t                           transaction_id;
-  Node(const std::string& key, const std::string& value, int level,
-       const uint64_t transaction_ids = 0)
-      : key_(key), value_(value), forward(level, nullptr), transaction_id(transaction_ids) {}
+  std::string                           key_;
+  std::string                           value_;
+  std::unique_ptr<Node>                 next_;
+  std::array<Node*, Global_::FIX_LEVEL> forward;
+  uint64_t                              transaction_id;
+  Node(const std::string& key, const std::string& value, const uint64_t transaction_ids = 0)
+      : key_(key), value_(value), next_{}, transaction_id(transaction_ids) {
+    forward.fill(nullptr);
+  }
   auto operator<=>(const Node& other) const;
 };
 
@@ -34,7 +35,7 @@ class SkiplistIterator : public BaseIterator {
 
  public:
   using valuetype = std::pair<std::string, std::string>;
-  SkiplistIterator(std::shared_ptr<Node> skiplist);
+  SkiplistIterator(Node* skiplist);
   SkiplistIterator();
   ~SkiplistIterator() = default;
   BaseIterator& operator++() override;
@@ -49,7 +50,7 @@ class SkiplistIterator : public BaseIterator {
   std::pair<std::string, std::string> getValue() const;
 
  private:
-  std::shared_ptr<Node> current;
+  Node* current;
 };
 
 inline int cmp(const std::string& a, const std::string& b) {
@@ -63,15 +64,16 @@ inline int cmp(const std::string& a, const std::string& b) {
 }
 class Skiplist {
  public:
-  explicit Skiplist(int max_level_ = MAX_LEVEL)
+  explicit Skiplist(int max_level_ = Global_::MAX_LEVEL)
       : max_level(max_level_), current_level(1), size_bytes(0), nodecount(0), dis(0.0, 1.0) {
-    head = std::make_shared<Node>("", "", max_level_);
-  }  // 默认最大16层
+    head = std::make_unique<Node>(std::string(), std::string(), 0);
+    size_bytes += sizeof(uint64_t) + 8 * sizeof(Global_::FIX_LEVEL + 1);
+  }  // 默认最大12层
   Skiplist(const Skiplist& other)            = delete;
   Skiplist& operator=(const Skiplist& other) = delete;
   Skiplist(Skiplist&& other) noexcept
       : max_level(other.max_level),
-        head(other.head),
+        head(std::move(other.head)),
         current_level(other.current_level),
         size_bytes(other.size_bytes.load()),
         nodecount(other.nodecount.load()) {
@@ -93,7 +95,7 @@ class Skiplist {
   bool Delete(const std::string& key);
 
   std::optional<std::string> Contain(const std::string& key, const uint64_t transaction_id = 0);
-  std::shared_ptr<Node>      Get(const std::string& key, const uint64_t transaction_id = 0);
+  std::unique_ptr<Node>      Get(const std::string& key, const uint64_t transaction_id = 0);
   std::vector<std::pair<std::string, std::string>> flush();
   std::size_t                                      get_size();
   std::size_t                                      getnodecount();
@@ -109,8 +111,7 @@ class Skiplist {
   Global_::SkiplistStatus get_status() const;
 
  private:
-  static constexpr int             MAX_RANGES = 256;  // 最大范围
-  std::shared_ptr<Node>            head;
+  std::unique_ptr<Node>            head;
   int                              max_level;      // 最大层级
   int                              current_level;  // 当前层级
   std::atomic_size_t               size_bytes;     // 内存占用，达到。flush到disk
