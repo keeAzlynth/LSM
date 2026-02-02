@@ -1,6 +1,8 @@
 #pragma once
 #include <random>
 namespace Global_ {
+constexpr int    FIX_LEVEL                         = 5;
+constexpr int    MAX_LEVEL                         = 12;
 constexpr int    MAX_MEMTABLE_SIZE_PER_TABLE       = 1024 * 1024 * 2;  // 2MB
 constexpr int    MAX_SSTABLE_SIZE                  = 1024 * 1024 * 4;  // 4MB
 constexpr int    Block_SIZE                        = 1024 * 4;         // 4KB
