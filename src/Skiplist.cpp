@@ -200,6 +200,37 @@ std::vector<std::pair<std::string, std::string>> Skiplist::flush() {
   }
   return result;
 }
+Node* Skiplist::get_node(const std::string& key, const uint64_t transaction_id) {
+  auto current = head.get();
+  // 从最高层开始查找
+  for (int i = current_level - 1; i >= 0; i--) {
+    while (current->forward[i] && cmp(current->forward[i]->key_, key) == -1) {
+      current = current->forward[i];
+    }
+  }
+  if (current->forward[0] && cmp(current->forward[0]->key_, key) == 0) {
+    if (transaction_id == 0) {
+      current = current->forward[0];
+      return current;
+    } else {
+      while (current->forward[0] && cmp(current->forward[0]->key_, key) == 0 &&
+             current->forward[0]->transaction_id > transaction_id) {
+        current = current->forward[0];
+      }
+      if (current->forward[0] && cmp(current->forward[0]->key_, key) == 0 &&
+          (!current->forward[0]->value_.empty())) {
+        current = current->forward[0];
+        return current;
+      } else if (cmp(current->key_, key) == 0 && current->transaction_id <= transaction_id &&
+                 (!current->value_.empty())) {
+        return current;
+      }
+      return nullptr;
+    }
+  }
+  return nullptr;  // 如果没有找到，返回空值
+}
+
 std::size_t Skiplist::get_size() {
   return size_bytes;
 }

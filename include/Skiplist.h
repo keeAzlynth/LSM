@@ -97,15 +97,16 @@ class Skiplist {
   std::optional<std::string> Contain(const std::string& key, const uint64_t transaction_id = 0);
   std::unique_ptr<Node>      Get(const std::string& key, const uint64_t transaction_id = 0);
   std::vector<std::pair<std::string, std::string>> flush();
-  std::size_t                                      get_size();
-  std::size_t                                      getnodecount();
-  int                                              get_range_index(const std::string& key);
-  auto                                             seekToFirst();
-  auto                                             seekToLast();
-  SkiplistIterator                                 end();
-  SkiplistIterator                                 begin();
-  SkiplistIterator                                 prefix_serach_begin(const std::string& key);
-  SkiplistIterator                                 prefix_serach_end(const std::string& key);
+  Node*            get_node(const std::string& key, const uint64_t transaction_id = 0);
+  std::size_t      get_size();
+  std::size_t      getnodecount();
+  int              get_range_index(const std::string& key);
+  auto             seekToFirst();
+  auto             seekToLast();
+  SkiplistIterator end();
+  SkiplistIterator begin();
+  SkiplistIterator prefix_serach_begin(const std::string& key);
+  SkiplistIterator prefix_serach_end(const std::string& key);
 
   void                    set_status(Global_::SkiplistStatus status);
   Global_::SkiplistStatus get_status() const;
