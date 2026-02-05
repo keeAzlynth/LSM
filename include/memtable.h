@@ -74,8 +74,8 @@ class MemTable {
   void   remove_mutex(const std::string& key, const uint64_t transaction_id = 0);
   void   remove_batch(const std::vector<std::string>& key_pairs, const uint64_t transaction_id = 0);
   bool   IsFull();
-  std::shared_ptr<Skiplist>            flush();
-  std::list<std::shared_ptr<Skiplist>> flushsync();
+  std::unique_ptr<Skiplist>            flush();
+  std::list<std::unique_ptr<Skiplist>> flushsync();
   void                                 frozen_cur_table();
   MemTableIterator                     begin();
   MemTableIterator                     end();
@@ -87,8 +87,8 @@ class MemTable {
   };
 
  private:
-  std::shared_ptr<Skiplist>            current_table;  // 活跃 SkipList
-  std::list<std::shared_ptr<Skiplist>> fixed_tables;   // 不可写的 SkipList==InmutTable
+  std::unique_ptr<Skiplist>            current_table;  // 活跃 SkipList
+  std::list<std::unique_ptr<Skiplist>> fixed_tables;   // 不可写的 SkipList==InmutTable
   size_t                               fixed_bytes;    // fixed_tables的跳表的大小
   std::shared_mutex                    fix_lock_;      // 保护当前跳表的锁
   std::shared_mutex                    cur_lock_;

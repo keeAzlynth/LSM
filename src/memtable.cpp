@@ -1,6 +1,7 @@
 #include "../include/memtable.h"
 #include <spdlog/logger.h>
 #include "spdlog/spdlog.h"
+#include <memory>
 #include <utility>
 bool operator==(const MemTableIterator& lhs, const MemTableIterator& rhs) noexcept {
   if (lhs.queue_.empty() || rhs.queue_.empty()) {
@@ -137,7 +138,7 @@ bool MemTableIterator::top_value_legal() const {
 }
 
 MemTable::MemTable() {
-  current_table = std::make_shared<Skiplist>(MAX_LEVEL);
+  current_table = std::move(std::make_unique<Skiplist>());
   fixed_bytes   = 0;
   cur_status    = SkiplistStatus::kNormal;
 }
@@ -192,25 +193,25 @@ std::optional<std::pair<std::string, uint64_t>> MemTable::get(const std::string&
 
 SkiplistIterator MemTable::cur_get(const std::string& key, const uint64_t transaction_id) {
   std::shared_lock<std::shared_mutex> lock(cur_lock_);
-  return SkiplistIterator(current_table->Get(key, transaction_id));
+  return SkiplistIterator(current_table->get_node(key, transaction_id));
 }
 SkiplistIterator MemTable::fix_get(const std::string& key, const uint64_t transaction_id) {
   std::shared_lock<std::shared_mutex> lock(fix_lock_);
   for (const auto& result : fixed_tables) {
     if (result->Contain(key, transaction_id).has_value()) {
-      return SkiplistIterator(result->Get(key, transaction_id));
+      return SkiplistIterator(result->get_node(key, transaction_id));
     }
   }
   return SkiplistIterator();
 }
 SkiplistIterator MemTable::get_mutex(const std::string& key, std::vector<std::string>& values) {
   std::shared_lock<std::shared_mutex> lock(cur_lock_);
-  return SkiplistIterator(current_table->Get(key));
+  return SkiplistIterator(current_table->get_node(key));
   lock.unlock();
   std::shared_lock<std::shared_mutex> second_lock(fix_lock_);
   for (const auto& result : fixed_tables) {
     if (result->Contain(key).has_value()) {
-      return SkiplistIterator(result->Get(key));
+      return SkiplistIterator(result->get_node(key));
     }
   }
   return SkiplistIterator();
@@ -274,31 +275,30 @@ bool MemTable::IsFull() {
   return current_table->get_size() > Global_::MAX_MEMTABLE_SIZE_PER_TABLE;
 }
 
-// This function is used to flush the current memtable to disk,刷新到磁盘
-std::shared_ptr<Skiplist> MemTable::flush() {
+// This function is used to flush the current memtable to disk,just for test
+std::unique_ptr<Skiplist> MemTable::flush() {
   std::unique_lock<std::shared_mutex> lock(cur_lock_);
-  auto                                new_table = std::make_shared<Skiplist>(MAX_LEVEL);
+  auto                                new_table = std::move(std::make_unique<Skiplist>());
   auto                                temp      = std::move(current_table);
   current_table                                 = std::move(new_table);
   fixed_bytes += current_table->get_size();
   return temp;
 }
-std::list<std::shared_ptr<Skiplist>> MemTable::flushsync() {
+std::list<std::unique_ptr<Skiplist>> MemTable::flushsync() {
   std::unique_lock<std::shared_mutex> lock(cur_lock_);
-  auto                                new_table = std::make_shared<Skiplist>(MAX_LEVEL);
-  fixed_tables.push_back(std::move(current_table));
-  current_table = std::move(new_table);
+  auto                                new_table = std::make_unique<Skiplist>();
   fixed_bytes += current_table->get_size();
-  return fixed_tables;
+  fixed_tables.emplace_back(std::move(current_table));
+  current_table = std::move(new_table);
+  return std::move(fixed_tables);
 }
 void MemTable::frozen_cur_table() {
   std::unique_lock<std::shared_mutex> lock(cur_lock_);
-  auto                                new_table = std::make_shared<Skiplist>(MAX_LEVEL);
-  auto                                temp_size = current_table->get_size();
+  auto                                new_table = std::make_unique<Skiplist>();
+  fixed_bytes += current_table->get_size();
   std::unique_lock<std::shared_mutex> lock2(fix_lock_);
-  fixed_tables.push_front(current_table);
-  current_table = new_table;
-  fixed_bytes += temp_size;
+  fixed_tables.push_front(std::move(current_table));
+  current_table = std::move(new_table);
 }
 
 MemTableIterator MemTable::begin() {
