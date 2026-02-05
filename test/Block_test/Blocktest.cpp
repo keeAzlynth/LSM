@@ -35,7 +35,7 @@ TEST_F(BlockTest, BinarySearch) {
   block->add_entry("key2", "value2", 0);
   block->add_entry("key3", "value3", 0);
 
-  auto idx = block->get_idx_binary("key2");
+  auto idx = block->get_offset_binary("key2");
   EXPECT_TRUE(idx.has_value());
 }
 

@@ -22,7 +22,8 @@ class BlockIterator {
 
   // 构造函数
   BlockIterator();
-  BlockIterator(std::shared_ptr<Block> block_, const std::string& key, uint64_t tranc_id = 0);
+  BlockIterator(std::shared_ptr<Block> block_, const std::string& key, uint64_t tranc_id = 0,
+                bool is_prefix = false);
   BlockIterator(std::shared_ptr<Block> block_, size_t index, uint64_t tranc_id = 0,
                 bool should_skip = true);
 

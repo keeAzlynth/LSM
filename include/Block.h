@@ -15,9 +15,12 @@ class Block : public std::enable_shared_from_this<Block> {
 
   static std::shared_ptr<Block> decode(const std::vector<uint8_t>& encoded, bool with_hash = true);
   std::string                   get_first_key();
-  std::optional<size_t>         get_idx_binary(const std::string& key, const uint64_t tranc_id = 0);
-  std::optional<size_t>         get_prefix_begin_idx_binary(const std::string& key);
-  std::optional<size_t>         get_prefix_end_idx_binary(const std::string& key);
+  std::optional<std::pair<size_t, size_t>> get_offset_binary(const std::string& key,
+                                                             const uint64_t     tranc_id = 0);
+  std::optional<std::pair<size_t, size_t>> get_prefix_begin_offset_binary(
+      const std::string& key_prefix);
+  std::optional<std::pair<size_t, size_t>> get_prefix_end_offset_binary(
+      const std::string& key_prefix);
   std::vector<std::tuple<std::string, std::string, uint64_t>> get_prefix_tran_id(
       const std::string& key, const uint64_t tranc_id = 0);
   std::optional<std::size_t> get_offset(const std::size_t index);

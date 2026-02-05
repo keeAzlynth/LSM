@@ -6,25 +6,41 @@
 
 BlockIterator::BlockIterator() : block(nullptr), current_index(0), tranc_id_(0) {}
 BlockIterator::BlockIterator(std::shared_ptr<Block> block_, const std::string& key,
-                             uint64_t tranc_id)
+                             uint64_t tranc_id, bool is_prefix)
     : block(block_), tranc_id_(tranc_id) {  // 初始化为0
   if (!block) {
     return;
   }
-  auto iter = block->get_idx_binary(key, tranc_id);
-  if (iter.has_value()) {
-    current_index = iter.value();
-  } else {
-    current_index = block->Offset_.size();
+  if (is_prefix) {
+    auto iter = block->get_prefix_begin_offset_binary(key);
+    if (iter.has_value()) {
+      auto index = iter->second;
+      while (block_->get_value(index).starts_with(key)) {
+        if (block_->get_tranc_id(block_->get_offset(index).value()).value() <= tranc_id) {
+          break;
+        }
+        index++;
+      }
+      current_index = index;
+      update_current();
+      return;
+    }
   }
+  auto inres = block_->get_offset_binary(key, tranc_id);
+  if (inres.has_value()) {
+    current_index = inres->second;
+    update_current();
+    return;
+  }
+  current_index = block->Offset_.size();
 }
 BlockIterator::BlockIterator(std::shared_ptr<Block> block_, size_t index, uint64_t tranc_id,
                              bool should_skip)
     : block(block_), current_index(index), tranc_id_(tranc_id) {
   if (should_skip) {
     skip_by_tranc_id();  // 只在需要时跳过
-    update_current();
   }
+  update_current();
 }
 
 bool BlockIterator::is_end() {
@@ -51,9 +67,6 @@ BlockIterator& BlockIterator::operator++() {
 BlockIterator::value_type BlockIterator::operator*() {
   if (!cached_value.has_value()) {
     update_current();
-  }
-  if (!cached_value.has_value()) {
-    throw std::runtime_error("Dereferencing invalid iterator");
   }
   return *cached_value;
 }
