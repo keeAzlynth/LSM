@@ -32,7 +32,8 @@ class SstIterator : public BaseIterator {
   SstIterator();
   SstIterator(std::shared_ptr<Sstable> sst, uint64_t tranc_id);
   // 创建迭代器, 并移动到第指定key
-  SstIterator(std::shared_ptr<Sstable> sst, const std::string& key, uint64_t tranc_id);
+  SstIterator(std::shared_ptr<Sstable> sst, const std::string& key, uint64_t tranc_id,
+              bool is_prefix = false);
   SstIterator(std::shared_ptr<Sstable> sst, size_t block_idx, const std::string& key,
               uint64_t tranc_id);
   SstIterator(std::shared_ptr<Sstable> sst, std::shared_ptr<BlockIterator> block_iter,
@@ -41,10 +42,10 @@ class SstIterator : public BaseIterator {
   static std::optional<std::pair<SstIterator, SstIterator>> find_prefix_key(
       std::shared_ptr<Sstable> sst, std::string prefix, uint64_t tranc_id);
 
-  void                                           set_end();
-  void                                           seek(const std::string& key);
-  std::string                                    key() const;
-  std::string                                    value() const;
+  void        set_end();
+  void        seek(const std::string& key, bool is_prefix = false);
+  std::string key() const;
+  std::string value() const;
   std::tuple<std::string, std::string, uint64_t> getValue() const;
   bool                                           valid() const override;
   bool                                           isEnd() override;
@@ -54,8 +55,9 @@ class SstIterator : public BaseIterator {
   auto      operator<=>(BaseIterator& rhs) const -> std::strong_ordering;
   valuetype operator*() const override;
 
-  uint64_t     get_tranc_id() const override;
-  IteratorType type() const override;
+  uint64_t              get_tranc_id() const override;
+  std::optional<size_t> get_Block_Meta_size() const;
+  IteratorType          type() const override;
 
   BlockIterator::pointer   operator->() const;
   size_t                   get_block_idx() const;

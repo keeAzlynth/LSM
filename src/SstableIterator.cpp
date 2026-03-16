@@ -2,6 +2,7 @@
 
 #include "../include/Sstable.h"
 #include "../include/SstableIterator.h"
+#include <optional>
 #include <string>
 #include <tuple>
 
@@ -39,8 +40,10 @@ SstIterator::SstIterator(std::shared_ptr<Sstable> sst, uint64_t tranc_id)
   m_block_it  = std::make_shared<BlockIterator>(block, 0, tranc_id);
 }
 
-SstIterator::SstIterator(std::shared_ptr<Sstable> sst, const std::string& key, uint64_t tranc_id) {
-  seek(key);
+SstIterator::SstIterator(std::shared_ptr<Sstable> sst, const std::string& key, uint64_t tranc_id,
+                         bool is_prefix)
+    : m_sst(sst), max_tranc_id_(tranc_id) {
+  seek(key, is_prefix);
 }
 SstIterator::SstIterator(std::shared_ptr<Sstable> sst, size_t block_idx,
                          const std::string& key = std::string(), uint64_t tranc_id = 0)
@@ -64,16 +67,21 @@ SstIterator::SstIterator(std::shared_ptr<Sstable> sst, std::shared_ptr<BlockIter
       m_block_idx(m_block_it->getIndex()),
       max_tranc_id_(tranc_id) {}
 void SstIterator::set_end() {
-  m_block_idx = std::string::npos;
-  m_block_it  = nullptr;
+  m_block_it     = nullptr;
+  auto meta_size = get_Block_Meta_size();
+  if (meta_size.has_value()) {
+    m_block_idx = meta_size.value();
+    return;
+  }
+  m_block_idx = -1;
 }
-void SstIterator::seek(const std::string& key) {
+void SstIterator::seek(const std::string& key, bool is_prefix) {
   if (!m_sst) {
     set_end();
     return;
   }
 
-  auto find_result = m_sst->find_block_idx(key);
+  auto find_result = m_sst->find_block_idx(key, is_prefix);
   if (!find_result.has_value()) {
     set_end();
     return;
@@ -81,12 +89,8 @@ void SstIterator::seek(const std::string& key) {
   m_block_idx = find_result.value();
 
   auto block = m_sst->read_block(m_block_idx);
-  if (!block) {
-    set_end();
-    return;
-  }
 
-  m_block_it = std::make_shared<BlockIterator>(block, key, max_tranc_id_);
+  m_block_it = std::make_shared<BlockIterator>(block, key, max_tranc_id_, is_prefix);
   if (m_block_it->is_end()) {
     set_end();
     return;
@@ -109,7 +113,10 @@ std::string SstIterator::value() const {
 }
 
 std::tuple<std::string, std::string, uint64_t> SstIterator::getValue() const {
-  return std::make_tuple(key(), value(), m_block_it->get_cur_tranc_id());
+  if (m_block_it) {
+    return std::make_tuple(key(), value(), m_block_it->get_cur_tranc_id());
+  }
+  return std::make_tuple(std::string(), std::string(), 0);
 }
 
 BaseIterator& SstIterator::operator++() {
@@ -123,8 +130,8 @@ BaseIterator& SstIterator::operator++() {
       // 读取下一个block
       auto          next_block = m_sst->read_block(m_block_idx);
       BlockIterator new_block_it(next_block, 0, max_tranc_id_);
+      cached_value  = std::nullopt;
       (*m_block_it) = new_block_it;
-      cached_value  = {key(), value()};
     } else {
       // 没有下一个block
       m_block_it = nullptr;
@@ -133,7 +140,7 @@ BaseIterator& SstIterator::operator++() {
   return *this;
 }
 bool SstIterator::isEnd() {
-  return !m_block_it;
+  return m_block_it && !is_block_index_vaild(m_block_idx) ? true : false;
 }
 bool SstIterator::is_block_index_vaild(size_t block_index) const {
   return m_sst->is_block_index_vaild(block_index);
@@ -143,7 +150,7 @@ bool SstIterator::exists_key_prefix(std::string key) const {
   if (!m_block_it) {
     return false;
   }
-  if (m_block_it->get_block()->get_prefix_begin_idx_binary(key).has_value()) {
+  if (m_block_it->get_block()->get_prefix_begin_offset_binary(key).has_value()) {
     return true;
   }
   return false;
@@ -177,6 +184,12 @@ SstIterator::valuetype SstIterator::operator*() const {
 
 uint64_t SstIterator::get_tranc_id() const {
   return max_tranc_id_;
+}
+std::optional<size_t> SstIterator::get_Block_Meta_size() const {
+  if (m_sst) {
+    return m_sst->num_blocks();
+  }
+  return std::nullopt;
 }
 IteratorType SstIterator::type() const {
   return IteratorType::SstIterator;

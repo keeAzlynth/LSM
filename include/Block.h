@@ -33,6 +33,7 @@ class Block : public std::enable_shared_from_this<Block> {
   bool          add_entry(const std::string& key, const std::string& value, const uint64_t tranc_id,
                           bool force_write = false);
   bool          is_empty() const;
+  void          print_debug() const;
   BlockIterator get_iterator(const std::string& key, const uint64_t tranc_id = 0);
   BlockIterator begin();
   BlockIterator end();

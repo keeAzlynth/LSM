@@ -7,11 +7,11 @@
 #include <cstring>
 #include <iterator>
 #include <optional>
+#include <print>
 #include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
-#include <print>
 
 void Sstable::del_sst() {
   file_obj.del_file();
@@ -25,7 +25,10 @@ std::shared_ptr<Sstable> Sstable::open(size_t sst_id, FileObj file_obj_,
   size_t file_size = sst->file_obj.size();
   // 读取文件末尾的元数据块
   if (file_size < sizeof(uint64_t) * 2 + sizeof(uint32_t) * 2) {
-    throw std::runtime_error("Invalid SST file: too small");
+    spdlog::info(
+        "Sstable::open(size_t sst_id, FileObj file_obj_,std::shared_ptr<BlockCache> block_cache) "
+        "Invalid SST file: too small");
+    return sst;
   }
 
   // 0. 读取最大和最小的事务id
@@ -82,8 +85,9 @@ std::shared_ptr<Sstable> Sstable::create_sst_with_meta_only(
 }
 
 std::shared_ptr<Block> Sstable::read_block(size_t block_idx) {
-  if (is_block_index_vaild(block_idx)) {
-    std::println("Block index out of range {}", block_metas.size());
+  if (!is_block_index_vaild(block_idx)) {
+    spdlog::info("Sstable::read_block(size_t block_idx) Block index out of range {}",
+                 block_metas.size());
     return nullptr;
   }
 
@@ -94,7 +98,7 @@ std::shared_ptr<Block> Sstable::read_block(size_t block_idx) {
       return cache_ptr;
     }
   } else {
-    std::print("Block cache not set");
+    spdlog::info("Sstable::read_block(size_t block_idx) Block cache not set");
   }
 
   const auto& meta = block_metas[block_idx];
@@ -109,36 +113,56 @@ std::shared_ptr<Block> Sstable::read_block(size_t block_idx) {
 
   // 读取block数据
   auto block_data = file_obj.read_to_slice(meta.offset_, block_size);
-  auto block_res  = Block::decode(block_data, true);
+  auto block_res  = Block::decode(block_data);
 
   block_cache->put(sst_id, block_idx, block_res);
   return block_res;
 }
 
 std::optional<size_t> Sstable::find_block_idx(const std::string& key, bool is_prefix) {
-  // 先在布隆过滤器判断key是否存在
-  if (!is_prefix && bloom_filter != nullptr && !bloom_filter->possibly_contains(key)) {
-    return std::nullopt;
-  }
-
-  // 二分查找
-  size_t left  = 0;
-  size_t right = block_metas.size();
-
-  while (left < right) {
-    size_t      mid  = left + (right - left) / 2;
-    const auto& meta = block_metas[mid];
-    if (key < meta.first_key_) {
-      right = mid;
-    } else if (key > meta.last_key_) {
-      left = mid + 1;
-    } else {
-      return mid;
+  if (!is_prefix) {
+    // 精确查询：先在布隆过滤器判断key是否存在
+    if (bloom_filter != nullptr && !bloom_filter->possibly_contains(key)) {
+      return std::nullopt;
     }
-  }
-  return std::nullopt;
-}
 
+    // 二分查找找到包含该key的块
+    size_t left  = 0;
+    size_t right = block_metas.size();
+
+    while (left < right) {
+      size_t      mid  = left + (right - left) / 2;
+      const auto& meta = block_metas[mid];
+      if (key < meta.first_key_) {
+        right = mid;
+      } else if (key > meta.last_key_) {
+        left = mid + 1;
+      } else {
+        return mid;  // key在这个块的范围内
+      }
+    }
+    return std::nullopt;
+  } else {
+    // 前缀查询：找到第一个块，其中last_key >= key_prefix
+    // 这样该块可能包含以key_prefix开头的keys
+    size_t                left  = 0;
+    size_t                right = block_metas.size();
+    std::optional<size_t> result;
+
+    while (left < right) {
+      size_t      mid  = left + (right - left) / 2;
+      const auto& meta = block_metas[mid];
+      if (meta.last_key_ >= key) {
+        // 这个块可能包含前缀匹配的keys
+        result = mid;
+        right  = mid;  // 继续查找更早的块
+      } else {
+        left = mid + 1;
+      }
+    }
+    return result;
+  }
+}
 std::vector<std::shared_ptr<Block>> Sstable::find_block_range(const std::string& key_prefix) {
   std::vector<std::shared_ptr<Block>> result;
   if ((key_prefix < first_key && !first_key.starts_with(key_prefix)) || key_prefix > last_key) {
@@ -179,7 +203,7 @@ std::string Sstable::get_last_key() const {
 }
 
 bool Sstable::is_block_index_vaild(size_t block_idx) const {
-  return block_idx >= block_metas.size() ? true : false;
+  return block_idx < block_metas.size() ? true : false;
 }
 bool Sstable::KeyExists(std::string key) {
   if (key < first_key || key > last_key) {
@@ -210,7 +234,10 @@ SstIterator Sstable::get_Iterator(const std::string& key, uint64_t tranc_id, boo
   if ((key < first_key && !first_key.starts_with(key)) || key > last_key) {
     return end();
   }
-  return SstIterator(shared_from_this(), key, tranc_id);
+  if (first_key.starts_with(key)) {
+    return begin(tranc_id);
+  }
+  return SstIterator(shared_from_this(), key, tranc_id, is_prefix);
 }
 
 SstIterator Sstable::current_Iterator(size_t block_idx, uint64_t tranc_id) {
@@ -248,13 +275,13 @@ std::vector<std::tuple<std::string, std::string, uint64_t>> Sstable::get_prefix_
 
   auto result = find_block_range(key);
   if (result.empty()) {
-    spdlog::info("No blocks found for prefix: {}\n", key);
+    spdlog::info(
+        "Sstable::get_prefix_range(const std::string& key,uint64_t tranc_id) No blocks found for "
+        "prefix: {}\n",
+        key);
     return res;
   }
   for (auto& re : result) {
-    if (!re) {
-      continue;
-    }
     auto range_res = re->get_prefix_tran_id(key, tranc_id);
     std::ranges::move(range_res.begin(), range_res.end(), std::back_inserter(res));
   }
@@ -313,16 +340,16 @@ void Sstbuild::add(const std::string& key, const std::string& value, uint64_t tr
 void Sstbuild::finish_block() {
   // 只有当 block 不为空时才编码并保存
   if (block_.is_empty()) {
-    std::print("DBG finish_block: block is empty, skipping\n");
+    spdlog::info("DBG finish_block: block is empty, skipping");
     return;
   }
 
   auto old_block     = std::move(block_);
   block_             = Block(Global_::Block_SIZE);  // 创建新 block
-  auto encoded_block = old_block.encode(true);
+  auto encoded_block = old_block.encode();
 
   if (encoded_block.empty()) {
-    std::print("ERROR: encoded_block is empty!\n");
+    spdlog::info("ERROR: encoded_block is empty!");
     throw std::runtime_error("Block encode returned empty data");
   }
 
@@ -347,9 +374,12 @@ std::shared_ptr<Sstable> Sstbuild::build(std::shared_ptr<BlockCache> block_cache
     finish_block();
   }
 
-  // 如果没有数据，抛出异常
+  // 如果没有数据，返回空指针
   if (block_metas.empty()) {
-    throw std::runtime_error("Cannot build empty SST");
+    spdlog::info(
+        "Sstbuild::build(std::shared_ptr<BlockCache> block_cache,const std::string& path, size_t "
+        "sst_id) Cannot build empty SST");
+    return nullptr;
   }
 
   // 编码元数据块

@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <print>
 
 class BlockIterator;
 Block::Block(std::size_t capacity) : capcity(capacity) {}
@@ -176,8 +177,13 @@ std::optional<std::pair<size_t, size_t>> Block::get_prefix_begin_offset_binary(
 
   // 优先检查完全匹配（并传入 tranc_id）
   auto exact = get_offset_binary(key_prefix);
-  if (exact.has_value())
-    return exact;
+  if (exact.has_value()) {
+    auto index = exact.value().second;
+    while (index != 0 && get_key(Offset_[index - 1]) == key_prefix) {
+      index--;
+    }
+    return std::make_optional<std::pair<size_t, size_t>>(Offset_[index], index);
+  }
 
   // 二分查找插入点（第一个 >= key_prefix）
   int left       = 0;
@@ -238,15 +244,8 @@ std::vector<std::tuple<std::string, std::string, uint64_t>> Block::get_prefix_tr
     return retrieved_data;
   }
   auto begin = std::make_shared<BlockIterator>(shared_from_this(), result1->second,
-                                               get_tranc_id(result1->first).value(), true);
+                                               get_tranc_id(result1->first).value());
   if (result1.value().second == Offset_.size() - 1) {
-    if (begin->get_cur_tranc_id() <= tranc_id) {
-      auto entry = begin->getValue();
-      retrieved_data.push_back({entry.first, entry.second, begin->get_cur_tranc_id()});
-    }
-    return retrieved_data;
-  }
-  if (!get_key(Offset_[result1->second + 1]).starts_with(key)) {
     if (begin->get_cur_tranc_id() <= tranc_id) {
       auto entry = begin->getValue();
       retrieved_data.push_back({entry.first, entry.second, begin->get_cur_tranc_id()});
@@ -345,6 +344,26 @@ bool Block::add_entry(const std::string& key, const std::string& value, const ui
 }
 bool Block::is_empty() const {
   return Data_.empty() && Offset_.empty();
+}
+void Block::print_debug() const {
+  if (is_empty()) {
+    return;
+  }
+  for (size_t i = 0; i < Offset_.size(); i++) {
+    uint16_t key_len;
+    std::memcpy(&key_len, Data_.data() + Offset_[i], sizeof(uint16_t));
+    auto key = std::string(
+        reinterpret_cast<const char*>(Data_.data() + Offset_[i] + sizeof(uint16_t)), key_len);
+    size_t   pos = Offset_[i] + sizeof(uint16_t) + key_len;
+    uint16_t value_len;
+    std::memcpy(&value_len, Data_.data() + pos, sizeof(uint16_t));
+    pos += sizeof(uint16_t);
+    auto value = std::string(reinterpret_cast<const char*>(Data_.data() + pos), value_len);
+    pos += value_len;
+    uint64_t tr;
+    std::memcpy(&tr, Data_.data() + pos, sizeof(uint64_t));
+    std::print("Block Entry {}: key={}, value={}, tranc_id={}\n", i, key, value, tr);
+  }
 }
 
 BlockIterator Block::get_iterator(const std::string& key, const uint64_t tranc_id) {

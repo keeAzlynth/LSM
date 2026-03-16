@@ -5,10 +5,11 @@ project(LSM_Sstable_Test)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -ggdb3 -fdebug-prefix-map=/=/")
 # 选项配置
-option(ENABLE_TSAN "启用 ThreadSanitizer" ON)
+option(ENABLE_TSAN "启用 ThreadSanitizer" OFF)
 option(ENABLE_VALGRIND "启用 Valgrind 支持" OFF)
-option(ENABLE_ASAN "启用 AddressSanitizer" ON)
+option(ENABLE_ASAN "启用 AddressSanitizer" OFF)
 
 # TSAN 配置
 if(ENABLE_TSAN)
