@@ -30,7 +30,6 @@ MemTableIterator::MemTableIterator(const SkiplistIterator& iter, const uint64_t 
     : max_transaction_id(transaction_id) {
   list_iter_ = std::make_shared<SkiplistIterator>(iter);
 }
-MemTable::~MemTable() = default;
 
 auto MemTableIterator::operator<=>(const BaseIterator& other) const {
   if (other.type() != IteratorType::MemTableIterator) {
@@ -204,18 +203,6 @@ SkiplistIterator MemTable::fix_get(const std::string& key, const uint64_t transa
   }
   return SkiplistIterator();
 }
-SkiplistIterator MemTable::get_mutex(const std::string& key, std::vector<std::string>& values) {
-  std::shared_lock<std::shared_mutex> lock(cur_lock_);
-  return SkiplistIterator(current_table->get_node(key));
-  lock.unlock();
-  std::shared_lock<std::shared_mutex> second_lock(fix_lock_);
-  for (const auto& result : fixed_tables) {
-    if (result->Contain(key).has_value()) {
-      return SkiplistIterator(result->get_node(key));
-    }
-  }
-  return SkiplistIterator();
-}
 
 std::vector<std::tuple<std::string, std::optional<std::string>, std::optional<uint64_t>>>
 MemTable::get_batch(const std::vector<std::string>& key_pairs, const uint64_t transaction_id) {
@@ -230,6 +217,9 @@ MemTable::get_batch(const std::vector<std::string>& key_pairs, const uint64_t tr
     }
   }
   return result;
+}
+std::size_t MemTable::get_node_num() const {
+  return current_table->getnodecount();
 }
 std::size_t MemTable::get_fixed_size() {
   std::shared_lock<std::shared_mutex> lock(fix_lock_);

@@ -147,11 +147,9 @@ std::optional<std::string> Skiplist::Contain(const std::string& key,
              current->forward[0]->transaction_id > transaction_id) {
         current = current->forward[0];
       }
-      if (current->forward[0] && cmp(current->forward[0]->key_, key) == 0 &&
-          (!current->forward[0]->value_.empty())) {
+      if (current->forward[0] && cmp(current->forward[0]->key_, key) == 0) {
         return current->forward[0]->value_;
-      } else if (cmp(current->key_, key) == 0 && current->transaction_id <= transaction_id &&
-                 (!current->value_.empty())) {
+      } else if (cmp(current->key_, key) == 0 && current->transaction_id <= transaction_id) {
         return current->value_;
       }
       return std::nullopt;
@@ -177,12 +175,10 @@ std::unique_ptr<Node> Skiplist::Get(const std::string& key, const uint64_t trans
              current->forward[0]->transaction_id > transaction_id) {
         current = current->forward[0];
       }
-      if (current->forward[0] && cmp(current->forward[0]->key_, key) == 0 &&
-          (!current->forward[0]->value_.empty())) {
+      if (current->forward[0] && cmp(current->forward[0]->key_, key) == 0) {
         current = current->forward[0];
         return std::make_unique<Node>(current->key_, current->value_, current->transaction_id);
-      } else if (cmp(current->key_, key) == 0 && current->transaction_id <= transaction_id &&
-                 (!current->value_.empty())) {
+      } else if (cmp(current->key_, key) == 0 && current->transaction_id <= transaction_id) {
         return std::make_unique<Node>(current->key_, current->value_, current->transaction_id);
       }
       return nullptr;

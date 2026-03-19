@@ -9,6 +9,7 @@
 #include <format>
 #include <memory>
 #include <random>
+#include <set>
 
 class SkiplistTest : public ::testing::Test {
  protected:
@@ -298,9 +299,9 @@ TEST_F(SkiplistTest, MemoryAnalysisTest1) {
   // 额外测试：随机操作内存稳定性
   std::print("\n=== 随机操作内存稳定性测试 ===\n");
   {
-    Skiplist                 random_list;
-    constexpr size_t         OPERATIONS = 1000;
-    std::vector<std::string> inserted_keys;
+    Skiplist              random_list;
+    constexpr size_t      OPERATIONS = 1000;
+    std::set<std::string> inserted_keys;  // 修改为set，追踪当前已插入的唯一键
 
     std::mt19937                       rng(std::random_device{}());
     std::uniform_int_distribution<int> op_dist(0, 2);
@@ -316,14 +317,17 @@ TEST_F(SkiplistTest, MemoryAnalysisTest1) {
 
       switch (op) {
         case 0:  // 插入
-          random_list.Insert(key, "random_value");
-          inserted_keys.push_back(key);
+          if (inserted_keys.find(key) == inserted_keys.end()) {
+            random_list.Insert(key, "random_value");
+            inserted_keys.insert(key);
+          }
           break;
         case 1:  // 删除
           if (!inserted_keys.empty()) {
-            size_t idx = key_num % inserted_keys.size();
-            random_list.Delete(inserted_keys[idx]);
-            inserted_keys.erase(inserted_keys.begin() + idx);
+            auto it_to_delete = inserted_keys.begin();
+            std::advance(it_to_delete, key_num % inserted_keys.size());
+            random_list.Delete(*it_to_delete);
+            inserted_keys.erase(it_to_delete);
           }
           break;
         case 2:  // 查找
@@ -508,7 +512,7 @@ TEST_F(SkiplistTest, MVCCDeleteVisibility) {
   // 测试2: txId=300时，应该看到删除（空值）
   {
     auto result = skiplist->Contain(key, 300);
-    EXPECT_FALSE(result.has_value())  // 删除标记应该返回空
+    EXPECT_TRUE(result.value().empty())  // 删除标记应该返回空
         << "错误：txId=300应该看到删除（空），实际: " << result.value();
     std::print("  txId=300 -> 期望: [空], 实际: [空] ✓\n");
   }
@@ -516,8 +520,8 @@ TEST_F(SkiplistTest, MVCCDeleteVisibility) {
   // 测试3: txId=350时，应该看到删除（空值）
   {
     auto result = skiplist->Contain(key, 350);
-    EXPECT_FALSE(result.has_value()) << "错误：txId=350应该看到删除（空），实际: "
-                                     << (result.has_value() ? result.value() : "[空]");
+    EXPECT_TRUE(result.value().empty()) << "错误：txId=350应该看到删除（空），实际: "
+                                        << (result.has_value() ? result.value() : "[空]");
     std::print("  txId=350 -> 期望: [空], 实际: [空] ✓\n");
   }
 
@@ -617,7 +621,7 @@ TEST_F(SkiplistTest, MultipleKeysMVCCVisibility) {
         }
       } else {
         // 期望空值
-        if (!actual.has_value()) {
+        if (!actual.has_value() || actual.value().empty()) {
           passedTests++;
           std::print("  key={}: 期望 [空], 实际 [空] ✓\n", key);
         } else {
@@ -718,7 +722,7 @@ TEST_F(SkiplistTest, ComplexVersionInterleaving) {
         std::print("  key={}: 期望 {}, 实际 {} {}\n", key, expectedValue.value(),
                    actual.has_value() ? actual.value() : "[空]", passed ? "✓" : "✗");
       } else {
-        passed = !actual.has_value();
+        passed = actual.value().empty();
         std::print("  key={}: 期望 [空], 实际 [空] {}\n", key, passed ? "✓" : "✗");
       }
 
@@ -747,7 +751,7 @@ TEST_F(SkiplistTest, ComplexVersionInterleaving) {
         std::print("  key={}: 期望 {}, 实际 {} {}\n", key, expectedValue.value(),
                    actual.has_value() ? actual.value() : "[空]", passed ? "✓" : "✗");
       } else {
-        passed = !actual.has_value();
+        passed = actual.value().empty();
         std::print("  key={}: 期望 [空], 实际 {} {}\n", key,
                    actual.has_value() ? actual.value() : "[空]", passed ? "✓" : "✗");
       }
@@ -776,7 +780,7 @@ TEST_F(SkiplistTest, ComplexVersionInterleaving) {
         std::print("  key={}: 期望 {}, 实际 {} {}\n", key, expectedValue.value(),
                    actual.has_value() ? actual.value() : "[空]", passed ? "✓" : "✗");
       } else {
-        passed = !actual.has_value();
+        passed = actual.value().empty();
         std::print("  key={}: 期望 [空], 实际 {} {}\n", key,
                    actual.has_value() ? actual.value() : "[空]", passed ? "✓" : "✗");
       }
@@ -826,16 +830,16 @@ TEST_F(SkiplistTest, EdgeCases) {
 
     // 任何大于等于100的事务ID都应该看到空
     auto result = skiplist->Contain(key, 100);
-    EXPECT_FALSE(result.has_value());
+    EXPECT_TRUE(result.value().empty());
     std::print("只有删除标记(txId=100) -> 期望 [空], 实际 [空] ✓\n");
 
     result = skiplist->Contain(key, 200);
-    EXPECT_FALSE(result.has_value());
+    EXPECT_TRUE(result.value().empty());
     std::print("只有删除标记(txId=200) -> 期望 [空], 实际 [空] ✓\n");
 
     // 小于100的事务ID应该看不到
     result = skiplist->Contain(key, 99);
-    EXPECT_FALSE(result.has_value());
+    EXPECT_TRUE(!result.has_value());
     std::print("只有删除标记(txId=99) -> 期望 [空], 实际 [空] ✓\n");
   }
 

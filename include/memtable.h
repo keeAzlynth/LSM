@@ -1,6 +1,7 @@
 #pragma once
 #include "Skiplist.h"
 #include "Sstable.h"
+#include <cstddef>
 #include <list>
 #include <memory>
 #include <optional>
@@ -51,7 +52,7 @@ class MemTable {
   MemTable();
   MemTable(const MemTable& other)            = delete;
   MemTable& operator=(const MemTable& other) = delete;
-  ~MemTable();
+  ~MemTable()                                = default;
 
   void put(const std::string& key, const std::string& value, const uint64_t transaction_id = 0);
   void put_mutex(const std::string& key, const std::string& value,
@@ -63,10 +64,9 @@ class MemTable {
 
   SkiplistIterator cur_get(const std::string& key, const uint64_t transaction_id = 0);
   SkiplistIterator fix_get(const std::string& key, const uint64_t transaction_id = 0);
-  SkiplistIterator get_mutex(const std::string& key, std::vector<std::string>& values);
   std::vector<std::tuple<std::string, std::optional<std::string>, std::optional<uint64_t>>>
-  get_batch(const std::vector<std::string>& key_s, const uint64_t transaction_id = 0);
-
+         get_batch(const std::vector<std::string>& key_s, const uint64_t transaction_id = 0);
+  size_t get_node_num() const;
   size_t get_cur_size();
   size_t get_fixed_size();
   size_t get_total_size();
