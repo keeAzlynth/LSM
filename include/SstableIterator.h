@@ -48,23 +48,22 @@ class SstIterator : public BaseIterator {
   std::string value() const;
   std::tuple<std::string, std::string, uint64_t> getValue() const;
   bool                                           valid() const override;
-  bool                                           isEnd() override;
+  bool                                           isEnd() const override;
   bool                                           is_block_index_vaild(size_t block_index) const;
   bool                                           exists_key_prefix(std::string key) const;
   BaseIterator&                                  operator++() override;
-  auto      operator<=>(BaseIterator& rhs) const -> std::strong_ordering;
+  auto      operator<=>(const SstIterator& rhs) const -> std::strong_ordering;
   valuetype operator*() const override;
 
   uint64_t              get_tranc_id() const override;
   std::optional<size_t> get_Block_Meta_size() const;
   IteratorType          type() const override;
 
-  BlockIterator::pointer   operator->() const;
-  size_t                   get_block_idx() const;
-  std::shared_ptr<Sstable> get_sstable() const;
+  BlockIterator::con_pointer operator->() const;
+  size_t                     get_block_idx() const;
+  std::shared_ptr<Sstable>   get_sstable() const;
 
-  // static std::pair<MemTableIterator, MemTableIterator> merge_sst_iterator(
-  //   std::vector<SstIterator> iter_vec, uint64_t tranc_id);
+  static MemTableIterator merge_sst_iterator(std::vector<SstIterator> iter_vec, uint64_t tranc_id);
 
  private:
   std::shared_ptr<Sstable>         m_sst;

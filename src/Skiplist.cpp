@@ -17,12 +17,8 @@ BaseIterator& SkiplistIterator::operator++() {
   }
   return *this;
 }
-auto SkiplistIterator::operator<=>(const BaseIterator& other) const {
-  if (other.type() != IteratorType::SkiplistIterator) {
-    return std::strong_ordering::less;
-  }
-  const SkiplistIterator& other_skiplist = static_cast<const SkiplistIterator&>(other);
-  return current <=> other_skiplist.current;
+auto SkiplistIterator::operator<=>(const SkiplistIterator& other) const {
+  return current <=> other.current;
 }
 bool operator==(const SkiplistIterator& lhs, const SkiplistIterator& rhs) noexcept {
   return lhs.current == rhs.current;
@@ -41,7 +37,7 @@ SkiplistIterator SkiplistIterator::operator+=(int offset) const {
 bool SkiplistIterator::valid() const {
   return current != nullptr;
 }
-bool SkiplistIterator::isEnd() {
+bool SkiplistIterator::isEnd() const {
   return current == nullptr;
 }
 IteratorType SkiplistIterator::type() const {

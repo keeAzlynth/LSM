@@ -19,8 +19,8 @@ std::optional<std::pair<SstIterator, SstIterator>> SstIterator::find_prefix_key(
                                      SstIterator(sstable, end, prefix, tranc_id));
 }
 bool operator==(const SstIterator& rhs, const SstIterator& lhs) noexcept {
-  return rhs.m_block_idx == lhs.m_block_idx && rhs.m_block_it == lhs.m_block_it &&
-         rhs.m_sst == lhs.m_sst && rhs.max_tranc_id_ == lhs.max_tranc_id_;
+  return rhs.m_sst == lhs.m_sst && rhs.m_block_idx == lhs.m_block_idx &&
+         rhs.m_block_it == lhs.m_block_it && rhs.max_tranc_id_ == lhs.max_tranc_id_;
 }
 SstIterator::SstIterator() {
   m_sst         = nullptr;
@@ -139,8 +139,8 @@ BaseIterator& SstIterator::operator++() {
   }
   return *this;
 }
-bool SstIterator::isEnd() {
-  return m_block_it && !is_block_index_vaild(m_block_idx) ? true : false;
+bool SstIterator::isEnd() const {
+  return m_block_it && m_sst->num_blocks() <= m_block_idx;
 }
 bool SstIterator::is_block_index_vaild(size_t block_index) const {
   return m_sst->is_block_index_vaild(block_index);
@@ -160,16 +160,12 @@ bool SstIterator::valid() const {
   return m_block_it && !m_block_it->is_end() && m_block_idx < m_sst->num_blocks();
 }
 
-auto SstIterator::operator<=>(BaseIterator& rhs) const -> std::strong_ordering {
-  if (this == &rhs) {
-    return std::strong_ordering::equal;
+auto SstIterator::operator<=>(const SstIterator& rhs) const -> std::strong_ordering {
+  if (m_block_idx != rhs.m_block_idx) {
+    return m_block_idx <=> rhs.m_block_idx;
   }
-  auto& other = dynamic_cast<SstIterator&>(rhs);
-  if (m_block_idx != other.m_block_idx) {
-    return m_block_idx <=> other.m_block_idx;
-  }
-  if (m_block_it && other.m_block_it) {
-    return (*m_block_it) <=> (*other.m_block_it);
+  if (m_block_it && rhs.m_block_it) {
+    return (*m_block_it) <=> (*rhs.m_block_it);
   }
   return std::strong_ordering::equal;
 }
@@ -195,6 +191,9 @@ IteratorType SstIterator::type() const {
   return IteratorType::SstIterator;
 }
 
+BlockIterator::con_pointer SstIterator::operator->() const {
+  return &(*cached_value);
+}
 size_t SstIterator::get_block_idx() const {
   return m_block_idx;
 }
@@ -203,6 +202,22 @@ std::shared_ptr<Sstable> SstIterator::get_sstable() const {
   return m_sst;
 }
 
+MemTableIterator SstIterator::merge_sst_iterator(std::vector<SstIterator> iter_vec,
+                                                 uint64_t                 tranc_id) {
+  if (iter_vec.empty()) {
+    return MemTableIterator();
+  }
+
+  MemTableIterator it_begin{};
+  for (auto& iter : iter_vec) {
+    while (iter.valid()) {
+      it_begin.queue_.emplace(iter.key(), iter.value(), iter.get_tranc_id(),
+                              iter.m_sst->get_sst_id(), 0);
+      ++iter;
+    }
+  }
+  return it_begin;
+}
 void SstIterator::update_current() const {
   if (valid()) {
     cached_value = **m_block_it;

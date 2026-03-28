@@ -39,12 +39,12 @@ class SkiplistIterator : public BaseIterator {
   SkiplistIterator();
   ~SkiplistIterator() = default;
   BaseIterator& operator++() override;
-  auto          operator<=>(const BaseIterator& other) const;
+  auto          operator<=>(const SkiplistIterator& other) const;
 
   valuetype                           operator*() const override;
   SkiplistIterator                    operator+=(int offset) const;
   bool                                valid() const override;
-  bool                                isEnd() override;
+  bool                                isEnd() const override;
   IteratorType                        type() const override;
   uint64_t                            get_tranc_id() const override;
   std::pair<std::string, std::string> getValue() const;
@@ -68,7 +68,7 @@ class Skiplist {
       : max_level(max_level_), current_level(1), size_bytes(0), nodecount(0), dis(0.0, 1.0) {
     head = std::make_unique<Node>(std::string(), std::string(), 0);
     size_bytes += sizeof(uint64_t) + 8 * sizeof(Global_::FIX_LEVEL + 1);
-  }  // 默认最大12层
+  }  // 默认最大取决FIX_LEVEL层
   Skiplist(const Skiplist& other)            = delete;
   Skiplist& operator=(const Skiplist& other) = delete;
   Skiplist(Skiplist&& other) noexcept
@@ -115,7 +115,7 @@ class Skiplist {
   std::unique_ptr<Node>            head;
   int                              max_level;      // 最大层级
   int                              current_level;  // 当前层级
-  std::atomic_size_t               size_bytes;     // 内存占用，达到。flush到disk
+  std::atomic_size_t               size_bytes;     // 内存占用，达到限制flush到disk
   std::atomic_int                  nodecount = 0;  // 节点数量
   std::random_device               rd;             // 随机数生成器
   static thread_local std::mt19937 gen;            // 随机数引擎

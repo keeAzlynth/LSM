@@ -64,7 +64,7 @@ class Sstable : public std::enable_shared_from_this<Sstable> {
 
 class Sstbuild {
  public:
-  Sstbuild(size_t block_size, bool has_bloom);
+  Sstbuild(size_t block_size, bool has_bloom = true);
   void   clean();
   void   add(const std::string& key, const std::string& value, uint64_t tranc_id = 0);
   void   finish_block();
