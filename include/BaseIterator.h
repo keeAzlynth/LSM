@@ -33,10 +33,8 @@ class SerachIterator {
   std::string value_;
   uint64_t    transaction_id_;
   size_t      level_;
-  size_t      index_;
-  SerachIterator(std::string key, std::string value, uint64_t transaction_id, size_t level,
-                 size_t index)
-      : key_(key), value_(value), transaction_id_(transaction_id), level_(level), index_(index) {}
+  SerachIterator(std::string key, std::string value, uint64_t transaction_id, size_t level)
+      : key_(key), value_(value), transaction_id_(transaction_id), level_(level) {}
   SerachIterator()  = default;
   ~SerachIterator() = default;
 };

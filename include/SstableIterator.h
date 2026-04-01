@@ -63,8 +63,6 @@ class SstIterator : public BaseIterator {
   size_t                     get_block_idx() const;
   std::shared_ptr<Sstable>   get_sstable() const;
 
-  static MemTableIterator merge_sst_iterator(std::vector<SstIterator> iter_vec, uint64_t tranc_id);
-
  private:
   std::shared_ptr<Sstable>         m_sst;
   std::shared_ptr<BlockIterator>   m_block_it;

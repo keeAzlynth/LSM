@@ -1,3 +1,7 @@
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <print>
@@ -366,6 +370,26 @@ Level_Iterator LSM_Engine::end() {
   return Level_Iterator{};
 }
 
+bool LSM_Engine::exit_valid_sst_iter(std::vector<SstIterator>& sst_iters) {
+  for (auto& it : sst_iters) {
+    if (it.valid()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::pair<size_t, size_t> LSM_Engine::find_the_small_kv(std::vector<SstIterator>& sst_iters) {
+  std::size_t index{0};
+  auto res = std::ranges::min_element(sst_iters, [&](const SstIterator& a, const SstIterator& b) {
+    if (a.key() != b.key()) {
+      return a.key() < b.key();
+    }
+    index++;
+    return a.get_tranc_id() > b.get_tranc_id();
+  });
+  return std::make_pair(res - sst_iters.begin(), index);
+}
 void LSM_Engine::full_compact(size_t src_level) {
   // 将 src_level 的 sst 全体压缩到 src_level + 1
   // 获取源level和目标level的 sst_id
@@ -409,28 +433,34 @@ void LSM_Engine::full_compact(size_t src_level) {
 
 std::vector<std::shared_ptr<Sstable>> LSM_Engine::full_l0_l1_compact(std::vector<size_t>& l0_ids,
                                                                      std::vector<size_t>& l1_ids) {
-  std::vector<SstIterator>              l0_iters;
-  std::vector<std::shared_ptr<Sstable>> l1_ssts;
-
-  for (auto id : l0_ids) {
-    auto sst_it = ssts[id]->begin(0);
-    l0_iters.push_back(sst_it);
+  std::vector<std::shared_ptr<Sstable>> sst;
+  sst.reserve(l0_ids.size() + l1_ids.size() - 1);
+  std::vector<SstIterator> l0_l1_iters;
+  auto                     merged  = merge_sst_iterator(l0_ids, l1_ids);
+  auto                     builder = std::make_unique<Sstbuild>(Global_::Block_CACHE_capacity);
+  while (exit_valid_sst_iter(merged)) {
+    auto res   = find_the_small_kv(merged);
+    auto index = res.first;
+    builder->add(merged[index].key(), merged[index].value(), merged[index].get_tranc_id());
+    if (res.second == 0) {
+      auto temp = merged[index].key();
+      while (merged[index].key() == temp) {
+        ++merged[index];
+      }
+    } else {
+      for (auto& it : merged) {
+        auto temp = merged[index].key();
+        while (it.key() == temp) {
+          ++it;
+        }
+      }
+    }
+    if (builder->estimated_size() > Global_::MAX_SSTABLE_SIZE) {
+      auto block_cache = std::make_shared<BlockCache>(Global_::Block_CACHE_capacity);
+      sst.emplace_back(builder->build(block_cache, get_sst_path(1, 1), 1));
+    }
   }
-  for (auto id : l1_ids) {
-    l1_ssts.push_back(ssts[id]);
-  }
-  // l0 的sst之间的key有重叠, 需要合并
-  auto l0_begin = SstIterator::merge_sst_iterator(l0_iters, 0);
-
-  std::shared_ptr<MemTableIterator> l0_begin_ptr = std::make_shared<MemTableIterator>();
-  *l0_begin_ptr                                  = l0_begin;
-
-  std::shared_ptr<ConcactIterator> old_l1_begin_ptr = std::make_shared<ConcactIterator>(l1_ssts, 0);
-
-  TwoMergeIterator l0_l1_begin(l0_begin_ptr, old_l1_begin_ptr, 0);
-
-  return gen_sst_from_iter(l0_l1_begin,
-                           Global_::MAX_MEMTABLE_SIZE_PER_TABLE * Global_::LSM_SST_LEVEL_RATIO, 1);
+  return sst;
 }
 
 std::vector<std::shared_ptr<Sstable>> LSM_Engine::full_common_compact(std::vector<size_t>& lx_ids,
@@ -491,6 +521,22 @@ size_t LSM_Engine::get_sst_size(size_t level) {
   }
 }
 
+std::vector<SstIterator> LSM_Engine::merge_sst_iterator(std::vector<std::size_t> iter_id0,
+                                                        std::vector<std::size_t> iter_id1) {
+  if (iter_id0.empty() && iter_id1.empty()) {
+    return std::vector<SstIterator>{};
+  }
+  std::vector<SstIterator> l0_l1_iters;
+  l0_l1_iters.reserve(iter_id0.size() + iter_id1.size());
+  for (auto id : iter_id0) {
+    auto sst_it = ssts[id]->begin(0);
+    l0_l1_iters.push_back(sst_it);
+  }
+  for (auto id : iter_id1) {
+    l0_l1_iters.push_back(ssts[id]->begin(0));
+  }
+  return l0_l1_iters;
+}
 void LSM_Engine::set_tran_manager(std::shared_ptr<TranManager> tran_manager_) {
   tran_manager = tran_manager_;
 }

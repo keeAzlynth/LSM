@@ -10,5 +10,4 @@ auto operator<=>(const SerachIterator& lhs, const SerachIterator& rhs) -> std::s
   if (lhs.level_ != rhs.level_) {
     return lhs.level_ <=> rhs.level_;
   }
-  return lhs.index_ <=> rhs.index_;
 }

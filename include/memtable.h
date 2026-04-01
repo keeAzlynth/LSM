@@ -15,6 +15,7 @@ bool operator==(const MemTableIterator& lhs, const MemTableIterator& rhs) noexce
 class MemTableIterator : public BaseIterator {
  public:
   friend class SstIterator;
+  friend class LSM_Engine;
 
   friend bool operator==(const MemTableIterator& lhs, const MemTableIterator& rhs) noexcept;
   using valuetype = std::pair<std::string, std::string>;

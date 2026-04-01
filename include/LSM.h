@@ -1,5 +1,6 @@
 #pragma once
 #include "Global.h"
+#include "SstableIterator.h"
 #include "memtable.h"
 #include "Sstable.h"
 #include "TmergeIterator.h"
@@ -56,11 +57,14 @@ class LSM_Engine : public std::enable_shared_from_this<LSM_Engine> {
   Level_Iterator begin(uint64_t tranc_id);
   Level_Iterator end();
 
-  static size_t get_sst_size(size_t level);
-
-  void set_tran_manager(std::shared_ptr<TranManager> tran_manager_);
+  static size_t            get_sst_size(size_t level);
+  std::vector<SstIterator> merge_sst_iterator(std::vector<std::size_t> iter_id0,
+                                              std::vector<std::size_t> iter_id1);
+  void                     set_tran_manager(std::shared_ptr<TranManager> tran_manager_);
 
  private:
+  bool                                  exit_valid_sst_iter(std::vector<SstIterator>& sst_iters);
+  std::pair<size_t, size_t>             find_the_small_kv(std::vector<SstIterator>& sst_iters);
   void                                  full_compact(size_t src_level);
   std::vector<std::shared_ptr<Sstable>> full_l0_l1_compact(std::vector<size_t>& l0_ids,
                                                            std::vector<size_t>& l1_ids);

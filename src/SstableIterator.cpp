@@ -4,8 +4,10 @@
 #include "../include/SstableIterator.h"
 #include <optional>
 #include <print>
+#include <regex>
 #include <string>
 #include <tuple>
+#include <vector>
 
 std::optional<std::pair<SstIterator, SstIterator>> SstIterator::find_prefix_key(
     std::shared_ptr<Sstable> sstable, std::string prefix, uint64_t tranc_id) {
@@ -206,22 +208,6 @@ std::shared_ptr<Sstable> SstIterator::get_sstable() const {
   return m_sst;
 }
 
-MemTableIterator SstIterator::merge_sst_iterator(std::vector<SstIterator> iter_vec,
-                                                 uint64_t                 tranc_id) {
-  if (iter_vec.empty()) {
-    return MemTableIterator();
-  }
-
-  MemTableIterator it_begin{};
-  for (auto& iter : iter_vec) {
-    while (iter.valid()) {
-      it_begin.queue_.emplace(iter.key(), iter.value(), iter.get_tranc_id(),
-                              iter.m_sst->get_sst_id(), 0);
-      ++iter;
-    }
-  }
-  return it_begin;
-}
 void SstIterator::update_current() const {
   if (valid()) {
     cached_value = **m_block_it;
