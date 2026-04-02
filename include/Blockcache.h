@@ -1,5 +1,6 @@
 #pragma once
 #include "Block.h"
+#include "Global.h"
 #include <cstdint>
 #include <list>
 #include <memory>
@@ -39,7 +40,7 @@ struct pair_equal {
 // 定义缓存池
 class BlockCache {
  public:
-  BlockCache(size_t capacity, size_t k);
+  BlockCache(size_t capacity = Global_::Block_CACHE_capacity, size_t k = Global_::Block_CACHE_K);
   ~BlockCache();
 
   // 获取缓存项

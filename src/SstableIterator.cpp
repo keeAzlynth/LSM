@@ -3,8 +3,6 @@
 #include "../include/Sstable.h"
 #include "../include/SstableIterator.h"
 #include <optional>
-#include <print>
-#include <regex>
 #include <string>
 #include <tuple>
 #include <vector>

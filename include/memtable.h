@@ -57,7 +57,7 @@ class MemTable {
   MemTable(const MemTable& other)            = delete;
   MemTable& operator=(const MemTable& other) = delete;
   ~MemTable()                                = default;
-
+  void clear();
   void put(const std::string& key, const std::string& value, const uint64_t transaction_id = 0);
   void put_mutex(const std::string& key, const std::string& value,
                  const uint64_t transaction_id = 0);

@@ -141,6 +141,12 @@ MemTable::MemTable()
 bool MemTableIterator::valid() const {
   return !queue_.empty();
 }
+void MemTable::clear() {
+  auto temp     = std::move(current_table);
+  current_table = std::move(std::make_unique<Skiplist>());
+  fixed_tables.clear();
+  fixed_bytes = 0;
+}
 void MemTable::put(const std::string& key, const std::string& value,
                    const uint64_t transaction_id) {
   current_table->Insert(key, value, transaction_id);
@@ -214,7 +220,11 @@ std::vector<std::tuple<std::string, std::optional<std::string>, uint64_t>> MemTa
   return result;
 }
 std::size_t MemTable::get_node_num() const {
-  return current_table->getnodecount();
+  std::size_t result = 0;
+  for (auto& it : fixed_tables) {
+    result += it->getnodecount();
+  }
+  return result + current_table->getnodecount();
 }
 std::size_t MemTable::get_fixed_size() {
   return fixed_bytes;
@@ -311,7 +321,7 @@ MemTableIterator MemTable::prefix_serach(const std::string& key, const uint64_t 
   }
   for (auto begin = begin_iter; begin != end_iter; ++begin) {
     iter.push_back(
-        SerachIterator(begin.getValue().first, begin.getValue().second, transaction_id, 0, 0));
+        SerachIterator(begin.getValue().first, begin.getValue().second, transaction_id, 0));
   }
   lock.unlock();
   std::shared_lock<std::shared_mutex> second_lock(fix_lock_);
@@ -322,7 +332,7 @@ MemTableIterator MemTable::prefix_serach(const std::string& key, const uint64_t 
     for (auto begin = fixed_table->prefix_serach_begin(key);
          begin != fixed_table->prefix_serach_end(key); ++begin) {
       iter.push_back(
-          SerachIterator(begin.getValue().first, begin.getValue().second, transaction_id, 0, 0));
+          SerachIterator(begin.getValue().first, begin.getValue().second, transaction_id, 0));
     }
   }
   return MemTableIterator(iter, transaction_id);

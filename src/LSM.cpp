@@ -1,15 +1,6 @@
-#include <algorithm>
-#include <array>
-#include <cstddef>
-#include <iterator>
-#include <memory>
-#include <optional>
-#include <print>
-#include <string>
-#include <tuple>
-#include <utility>
-#include <vector>
 #include "../include/LSM.h"
+#include <algorithm>
+#include <utility>
 #include "../include/SstableIterator.h"
 #include "../include/LeveIterator.h"
 #include "../include/contactIterator.h"
@@ -71,7 +62,7 @@ LSM_Engine::LSM_Engine(std::string path, size_t block_cache_capacity, size_t blo
     for (auto& [level, sst_id_list] : level_sst_ids) {
       std::ranges::sort(sst_id_list);
       if (level == 0) {
-        // 其他 level 的 sst 都是没有重叠的, 且 id 小的表示 key
+        // 其他 level 的 sst 都是没有重叠的, 且 id 小的表示最新sst
         // 排序在前面的部分, 不需要 reverse
         std::ranges::reverse(sst_id_list);
       }
@@ -85,7 +76,6 @@ std::optional<std::pair<std::string, uint64_t>> LSM_Engine::get(const std::strin
   auto mem_res = memtable->get(key, tranc_id);
   if (mem_res.has_value()) {
     if (mem_res.value().first.empty()) {
-      std::print("mem\n");
       return std::nullopt;  // 空值表示被删除
     }
     return std::pair<std::string, uint64_t>{mem_res.value().first, mem_res.value().second};
@@ -100,7 +90,6 @@ std::optional<std::pair<std::string, uint64_t>> LSM_Engine::get(const std::strin
     auto  sst_iterator = sst->get_Iterator(key, tranc_id);
     if (sst_iterator.valid()) {
       if (sst_iterator->second.empty()) {
-        std::print("{}sst\n", sst_id);
         return std::nullopt;  // 空值表示被删除
       }
       return std::pair<std::string, uint64_t>{sst_iterator->second, sst_iterator.get_tranc_id()};
@@ -109,7 +98,7 @@ std::optional<std::pair<std::string, uint64_t>> LSM_Engine::get(const std::strin
 
   // 3. 其他level的sst中查询
   for (size_t level = 1; level <= cur_max_level; level++) {
-    std::deque<size_t> l_sst_ids = level_sst_ids[level];
+    auto& l_sst_ids = level_sst_ids[level];
     // 二分查询
     size_t left  = 0;
     size_t right = l_sst_ids.size();
@@ -130,14 +119,13 @@ std::optional<std::pair<std::string, uint64_t>> LSM_Engine::get(const std::strin
       }
     }
   }
-  std::print("end\n");
   return std::nullopt;
 }
 
 std::vector<std::tuple<std::string, std::optional<std::string>, uint64_t>> LSM_Engine::get_batch(
-    const std::vector<std::string>& keys, uint64_t tranc_id) {
+    const std::vector<std::string>& keys, uint64_t tranc_id_) {
   // 1. 先从 memtable 中批量查找
-  auto results = memtable->get_batch(keys, tranc_id);
+  auto results = memtable->get_batch(keys, tranc_id_);
 
   // 2. 如果所有键都在memtable 中找到，直接返回
   std::vector<std::tuple<std::string, std::optional<std::string>, uint64_t>> un_search;
@@ -159,7 +147,7 @@ std::vector<std::tuple<std::string, std::optional<std::string>, uint64_t>> LSM_E
   for (auto& [key, value, tranc_id_index] : un_search) {
     for (auto& sst_id : level_sst_ids[0]) {
       auto& sst          = ssts[sst_id];
-      auto  sst_iterator = sst->get_Iterator(key, tranc_id);
+      auto  sst_iterator = sst->get_Iterator(key, tranc_id_);
       if (sst_iterator.valid()) {
         auto index = std::make_pair(sst_iterator->second, sst_iterator.get_tranc_id());
         if (index.first.empty()) {
@@ -193,7 +181,7 @@ std::vector<std::tuple<std::string, std::optional<std::string>, uint64_t>> LSM_E
 
         if (sst->get_first_key() <= key && key <= sst->get_last_key()) {
           // 如果键在当前 SST 文件范围内，则在 SST 中查找
-          auto sst_iterator = sst->get_Iterator(key, tranc_id);
+          auto sst_iterator = sst->get_Iterator(key, tranc_id_index);
           if (sst_iterator.valid()) {
             auto index     = std::make_pair(sst_iterator->second, sst_iterator.get_tranc_id());
             value          = index.first;
@@ -293,9 +281,9 @@ uint64_t LSM_Engine::remove_batch(const std::vector<std::string>& keys, uint64_t
 }
 
 void LSM_Engine::clear() {
-  // memtable.clear();
   level_sst_ids.clear();
   ssts.clear();
+  memtable->clear();
   // 清空当前文件夹的所有内容
   try {
     for (const auto& entry : std::filesystem::directory_iterator(data_dir)) {
@@ -311,7 +299,7 @@ void LSM_Engine::clear() {
 }
 
 uint64_t LSM_Engine::flush() {
-  if (memtable->get_node_num() == 0) {
+  if (memtable->get_total_size() == 0) {
     return 0;
   }
 
@@ -333,7 +321,9 @@ uint64_t LSM_Engine::flush() {
   // 4. 将 memtable 中最旧的表写入 SST
   std::vector<uint64_t> flushed_tranc_ids;
   auto                  sst_path = get_sst_path(new_sst_id, 0);
-  memtable->frozen_cur_table();
+  if (memtable->get_cur_size() > 0) {
+    memtable->frozen_cur_table();
+  }
   auto res = memtable->flushtodisk();
   for (auto i = res->begin(); i != res->end(); ++i) {
     auto kv       = i.getValue();
@@ -341,7 +331,10 @@ uint64_t LSM_Engine::flush() {
     builder.add(kv.first, kv.second, tranc_id);
   }
   auto new_sst = builder.build(block_cache, sst_path, new_sst_id);
-
+  if (!new_sst) {
+    next_sst_id--;
+    return 0;
+  }
   // 5. 更新内存索引
   ssts[new_sst_id] = new_sst;
 
@@ -381,10 +374,15 @@ bool LSM_Engine::exit_valid_sst_iter(std::vector<SstIterator>& sst_iters) {
 
 std::pair<size_t, size_t> LSM_Engine::find_the_small_kv(std::vector<SstIterator>& sst_iters) {
   std::size_t index{0};
+  // 先移除所有无效迭代器
+  auto valid_end =
+      std::ranges::remove_if(sst_iters, [&](const SstIterator& it) { return !it.valid(); });
+  sst_iters.erase(valid_end.begin(), valid_end.end());
+
+  // 然后在剩余的有效迭代器中找最小值（此时比较函数可以简化，因为都有效）
   auto res = std::ranges::min_element(sst_iters, [&](const SstIterator& a, const SstIterator& b) {
-    if (a.key() != b.key()) {
+    if (a.key() != b.key())
       return a.key() < b.key();
-    }
     index++;
     return a.get_tranc_id() > b.get_tranc_id();
   });
@@ -400,9 +398,9 @@ void LSM_Engine::full_compact(size_t src_level) {
   std::vector<size_t>                   ly_ids(old_level_id_y.begin(), old_level_id_y.end());
   if (src_level == 0) {
     // l0这一层不同sst的key有重叠, 需要额外处理
-    new_ssts = full_l0_l1_compact(lx_ids, ly_ids);
+    new_ssts = std::move(full_l0_l1_compact(lx_ids, ly_ids));
   } else {
-    new_ssts = full_common_compact(lx_ids, ly_ids, src_level + 1);
+    new_ssts = std::move(full_common_compact(lx_ids, ly_ids, src_level + 1));
   }
   // 完成 compact 后移除旧的sst记录
   for (auto& old_sst_id : old_level_id_x) {
@@ -434,56 +432,153 @@ void LSM_Engine::full_compact(size_t src_level) {
 std::vector<std::shared_ptr<Sstable>> LSM_Engine::full_l0_l1_compact(std::vector<size_t>& l0_ids,
                                                                      std::vector<size_t>& l1_ids) {
   std::vector<std::shared_ptr<Sstable>> sst;
-  sst.reserve(l0_ids.size() + l1_ids.size() - 1);
-  std::vector<SstIterator> l0_l1_iters;
-  auto                     merged  = merge_sst_iterator(l0_ids, l1_ids);
-  auto                     builder = std::make_unique<Sstbuild>(Global_::Block_CACHE_capacity);
-  while (exit_valid_sst_iter(merged)) {
-    auto res   = find_the_small_kv(merged);
-    auto index = res.first;
-    builder->add(merged[index].key(), merged[index].value(), merged[index].get_tranc_id());
-    if (res.second == 0) {
-      auto temp = merged[index].key();
-      while (merged[index].key() == temp) {
-        ++merged[index];
+  sst.reserve(std::max(l0_ids.size(), l1_ids.size()) + 1);
+  auto merged  = merge_sst_iterator(l0_ids, l1_ids);
+  auto builder = std::make_unique<Sstbuild>(Global_::Block_CACHE_capacity);
+
+  auto advance_all_with_key = [&](const std::string& key) {
+    for (auto& it : merged) {
+      while (it.valid() && it.key() == key) {
+        ++it;
       }
-    } else {
-      for (auto& it : merged) {
-        auto temp = merged[index].key();
-        while (it.key() == temp) {
-          ++it;
+    }
+  };
+
+  auto advance_one = [&](size_t idx, const std::string& key) {
+    while (merged[idx].valid() && merged[idx].key() == key) {
+      ++merged[idx];
+    }
+  };
+
+  auto find_best = [&]() -> std::pair<size_t, bool> {
+    std::string min_key;
+    uint64_t    max_tranc = 0;
+    size_t      best_idx  = SIZE_MAX;
+    bool        has_dup   = false;
+
+    for (size_t i = 0; i < merged.size(); ++i) {
+      if (!merged[i].valid())
+        continue;
+      const auto& k = merged[i].key();
+      if (best_idx == SIZE_MAX || k < min_key) {
+        min_key   = k;
+        max_tranc = merged[i].get_tranc_id();
+        best_idx  = i;
+        has_dup   = false;
+      } else if (k == min_key) {
+        has_dup = true;
+        if (merged[i].get_tranc_id() > max_tranc) {
+          max_tranc = merged[i].get_tranc_id();
+          best_idx  = i;
         }
       }
     }
-    if (builder->estimated_size() > Global_::MAX_SSTABLE_SIZE) {
-      auto block_cache = std::make_shared<BlockCache>(Global_::Block_CACHE_capacity);
-      sst.emplace_back(builder->build(block_cache, get_sst_path(1, 1), 1));
+    return {best_idx, has_dup};
+  };
+
+  while (exit_valid_sst_iter(merged)) {
+    auto [best_idx, has_dup] = find_best();
+    if (best_idx == SIZE_MAX)
+      break;
+
+    std::string cur_key = merged[best_idx].key();
+    builder->add(cur_key, merged[best_idx].value(), merged[best_idx].get_tranc_id());
+
+    if (has_dup) {
+      advance_all_with_key(cur_key);
+    } else {
+      advance_one(best_idx, cur_key);
+    }
+
+    if (builder->estimated_size() >= Global_::MAX_SSTABLE_SIZE) {
+      size_t new_id = next_sst_id++;
+      sst.emplace_back(builder->build(block_cache, get_sst_path(new_id, 1), new_id));
+      builder = std::make_unique<Sstbuild>(Global_::Block_CACHE_capacity);
     }
   }
+
+  if (builder->estimated_size() > 0) {
+    size_t new_id = next_sst_id++;
+    sst.emplace_back(builder->build(block_cache, get_sst_path(new_id, 1), new_id));
+  }
+
   return sst;
 }
-
 std::vector<std::shared_ptr<Sstable>> LSM_Engine::full_common_compact(std::vector<size_t>& lx_ids,
                                                                       std::vector<size_t>& ly_ids,
                                                                       size_t level_y) {
-  std::vector<std::shared_ptr<Sstable>> lx_iters;
-  std::vector<std::shared_ptr<Sstable>> ly_iters;
+  std::vector<std::shared_ptr<Sstable>> sst;
+  sst.reserve(std::max(lx_ids.size(), ly_ids.size()) + 1);
+  auto merged  = merge_sst_iterator(lx_ids, ly_ids);
+  auto builder = std::make_unique<Sstbuild>(Global_::Block_CACHE_capacity);
 
-  for (auto id : lx_ids) {
-    lx_iters.push_back(ssts[id]);
+  auto advance_all_with_key = [&](const std::string& key) {
+    for (auto& it : merged) {
+      while (it.valid() && it.key() == key) {
+        ++it;
+      }
+    }
+  };
+
+  auto advance_one = [&](size_t idx, const std::string& key) {
+    while (merged[idx].valid() && merged[idx].key() == key) {
+      ++merged[idx];
+    }
+  };
+
+  auto find_best = [&]() -> std::pair<size_t, bool> {
+    std::string min_key;
+    uint64_t    max_tranc = 0;
+    size_t      best_idx  = SIZE_MAX;
+    bool        has_dup   = false;
+
+    for (size_t i = 0; i < merged.size(); ++i) {
+      if (!merged[i].valid())
+        continue;
+      const auto& k = merged[i].key();
+      if (best_idx == SIZE_MAX || k < min_key) {
+        min_key   = k;
+        max_tranc = merged[i].get_tranc_id();
+        best_idx  = i;
+        has_dup   = false;
+      } else if (k == min_key) {
+        has_dup = true;
+        if (merged[i].get_tranc_id() > max_tranc) {
+          max_tranc = merged[i].get_tranc_id();
+          best_idx  = i;
+        }
+      }
+    }
+    return {best_idx, has_dup};
+  };
+
+  while (exit_valid_sst_iter(merged)) {
+    auto [best_idx, has_dup] = find_best();
+    if (best_idx == SIZE_MAX)
+      break;
+
+    std::string cur_key = merged[best_idx].key();
+    builder->add(cur_key, merged[best_idx].value(), merged[best_idx].get_tranc_id());
+
+    if (has_dup) {
+      advance_all_with_key(cur_key);
+    } else {
+      advance_one(best_idx, cur_key);
+    }
+
+    if (builder->estimated_size() >= Global_::MAX_SSTABLE_SIZE) {
+      size_t new_id = next_sst_id++;
+      sst.emplace_back(builder->build(block_cache, get_sst_path(new_id, level_y), new_id));
+      builder = std::make_unique<Sstbuild>(Global_::Block_CACHE_capacity);
+    }
   }
-  for (auto id : ly_ids) {
-    ly_iters.push_back(ssts[id]);
+
+  if (builder->estimated_size() > 0) {
+    size_t new_id = next_sst_id++;
+    sst.emplace_back(builder->build(block_cache, get_sst_path(new_id, level_y), new_id));
   }
 
-  std::shared_ptr<ConcactIterator> old_lx_begin_ptr =
-      std::make_shared<ConcactIterator>(lx_iters, 0);
-
-  std::shared_ptr<ConcactIterator> old_ly_begin_ptr =
-      std::make_shared<ConcactIterator>(ly_iters, 0);
-
-  TwoMergeIterator lx_ly_begin(old_lx_begin_ptr, old_ly_begin_ptr, 0);
-  return gen_sst_from_iter(lx_ly_begin, LSM_Engine::get_sst_size(level_y), level_y);
+  return sst;
 }
 
 std::vector<std::shared_ptr<Sstable>> LSM_Engine::gen_sst_from_iter(BaseIterator& iter,
@@ -625,7 +720,7 @@ void LSM::flush() {
 }
 
 void LSM::flush_all() {
-  while (engine->memtable->get_node_num() > 0) {
+  while (engine->memtable->get_total_size() > 0) {
     auto max_tranc_id = engine->flush();
     // tran_manager_->update_checkpoint_tranc_id(max_tranc_id);
   }

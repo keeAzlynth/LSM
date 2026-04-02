@@ -23,7 +23,7 @@ Level_Iterator::Level_Iterator(std::shared_ptr<LSM_Engine> engine, uint64_t max_
         // 如果开启了事务, 比当前事务 id 更大的记录是不可见的
         continue;
       }
-      item_vec.emplace_back(iter.key(), iter.value(), -sst_id, 0, iter.get_tranc_id());
+      item_vec.emplace_back(iter.key(), iter.value(), iter.get_tranc_id(), sst_id);
     }
   }
   std::shared_ptr<MemTableIterator> l0_iter_ptr =

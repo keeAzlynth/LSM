@@ -7,7 +7,5 @@ auto operator<=>(const SerachIterator& lhs, const SerachIterator& rhs) -> std::s
   if (lhs.transaction_id_ != rhs.transaction_id_) {
     return lhs.transaction_id_ <=> rhs.transaction_id_;
   }
-  if (lhs.level_ != rhs.level_) {
-    return lhs.level_ <=> rhs.level_;
-  }
+  return lhs.level_ <=> rhs.level_;
 }
