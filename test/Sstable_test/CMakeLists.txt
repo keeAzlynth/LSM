@@ -62,20 +62,20 @@ find_package(GTest REQUIRED)
 
 # 源文件列表
 set(SOURCE_FILES
-    ../../src/Sstable.cpp
-    ../../src/SstableIterator.cpp
-    ../../src/Block.cpp
-    ../../src/BlockIterator.cpp
-    ../../src/Blockcache.cpp
-    ../../src/std_file.cpp
-    ../../src/mmap.cpp
-    ../../src/file.cpp
-    ../../src/BloomFilter.cpp
-    ../../src/BlockMeta.cpp
-    ../../src/memtable.cpp
-    ../../src/Skiplist.cpp
-    ../../src/Baselterator.cpp
-    ../../src/Global.cpp
+    ../../src/storage/Sstable.cpp
+    ../../src/iterator/SstableIterator.cpp
+    ../../src/storage/Block.cpp
+    ../../src/iterator/BlockIterator.cpp
+    ../../src/storage/Blockcache.cpp
+    ../../src/storage/std_file.cpp
+    ../../src/storage/mmap.cpp
+    ../../src/storage/file.cpp
+    ../../src/storage/BloomFilter.cpp
+    ../../src/storage/BlockMeta.cpp
+    ../../src/core/memtable.cpp
+    ../../src/core/Skiplist.cpp
+    ../../src/iterator/Baselterator.cpp
+    ../../src/core/Global.cpp
 )
 
 # 创建测试可执行文件

@@ -1,4 +1,4 @@
-#include "../../include/Skiplist.h"
+#include "../../include/core/Skiplist.h"
 #include <gtest/gtest.h>
 #include <cmath>
 #include <string>

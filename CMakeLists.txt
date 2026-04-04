@@ -48,8 +48,16 @@ else()
 	message(STATUS "Tests are disabled by default. Enable tests with -DENABLE_SSTABLE_TEST=ON etc.")
 endif()
 
+# Collect all source files from src/ subdirectories
+file(GLOB_RECURSE LSM_SOURCES "src/*.cpp")
+
+# Create a library from the LSM sources
+add_library(lsm_lib STATIC ${LSM_SOURCES})
+target_include_directories(lsm_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
 # Keep an executable target for the main program (optional)
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp)
 	add_executable(lsm_main main.cpp)
+	target_link_libraries(lsm_main PRIVATE lsm_lib)
 	target_include_directories(lsm_main PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 endif()

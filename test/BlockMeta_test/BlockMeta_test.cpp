@@ -1,5 +1,5 @@
-#include "../../include/memtable.h"
-#include "../../include/Sstable.h"
+#include "../../include/core/memtable.h"
+#include "../../include/storage/Sstable.h"
 #include <gtest/gtest.h>
 #include <memory>
 #include <string>

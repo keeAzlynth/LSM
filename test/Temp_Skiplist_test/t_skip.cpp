@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 #include <chrono>
 
-#include "../../include/Skiplist.h"
+#include "../../include/core/Skiplist.h"
 
 using namespace std::chrono_literals;
 

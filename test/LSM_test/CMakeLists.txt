@@ -61,27 +61,27 @@ find_package(GTest REQUIRED)
 
 set(SOURCE_FILES
 	../../src/LSM.cpp
-	../../src/memtable.cpp
-	../../src/Skiplist.cpp
-	../../src/Sstable.cpp
-	../../src/SstableIterator.cpp
-	../../src/Block.cpp
-	../../src/BlockIterator.cpp
-	../../src/Blockcache.cpp
-	../../src/BlockMeta.cpp
-	../../src/BloomFilter.cpp
-	../../src/Baselterator.cpp
-	../../src/std_file.cpp
-	../../src/mmap.cpp
-	../../src/file.cpp
-	../../src/Global.cpp
-	../../src/Loger.cpp
-	../../src/record.cpp
-	../../src/wal.cpp
-	../../src/contactIterator.cpp
-	../../src/TmergeIterator.cpp
-	../../src/Levelterator.cpp
-	../../src/transaction.cpp
+	../../src/core/memtable.cpp
+	../../src/core/Skiplist.cpp
+	../../src/storage/Sstable.cpp
+	../../src/iterator/SstableIterator.cpp
+	../../src/storage/Block.cpp
+	../../src/iterator/BlockIterator.cpp
+	../../src/storage/Blockcache.cpp
+	../../src/storage/BlockMeta.cpp
+	../../src/storage/BloomFilter.cpp
+	../../src/iterator/Baselterator.cpp
+	../../src/storage/std_file.cpp
+	../../src/storage/mmap.cpp
+	../../src/storage/file.cpp
+	../../src/core/Global.cpp
+	../../src/utils/Loger.cpp
+	../../src/core/record.cpp
+	../../src/storage/wal.cpp
+	../../src/iterator/contactIterator.cpp
+	../../src/iterator/TmergeIterator.cpp
+	../../src/iterator/Levelterator.cpp
+	../../src/transaction/transaction.cpp
 )
 
 add_executable(lsm_test

@@ -1,7 +1,7 @@
-#include "../../include/memtable.h"
-#include "../../include/Blockcache.h"
-#include "../../include/SstableIterator.h"
-#include "../../include/Sstable.h"
+#include "../../include/core/memtable.h"
+#include "../../include/storage/Blockcache.h"
+#include "../../include/iterator/SstableIterator.h"
+#include "../../include/storage/Sstable.h"
 #include <gtest/gtest.h>
 #include <spdlog/spdlog.h>
 #include <cmath>

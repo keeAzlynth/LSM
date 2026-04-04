@@ -1,10 +1,10 @@
 #pragma once
-#include "Global.h"
-#include "SstableIterator.h"
-#include "memtable.h"
-#include "Sstable.h"
-#include "TmergeIterator.h"
-#include "transaction.h"
+#include "core/Global.h"
+#include "iterator/SstableIterator.h"
+#include "core/memtable.h"
+#include "storage/Sstable.h"
+#include "iterator/TmergeIterator.h"
+#include "transaction/transaction.h"
 #include <cstddef>
 #include <deque>
 #include <map>

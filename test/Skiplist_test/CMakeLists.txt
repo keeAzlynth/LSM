@@ -44,7 +44,7 @@ find_package(GTest REQUIRED)
 # 创建测试可执行文件
 add_executable(skiplist_test
     skiplist_test.cpp
-    ../../src/Skiplist.cpp
+    ../../src/core/Skiplist.cpp
 )
 
 target_include_directories(skiplist_test PRIVATE ../../include)

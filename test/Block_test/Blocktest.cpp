@@ -1,5 +1,5 @@
-#include "../../include/Block.h"
-#include "../../include/BlockIterator.h"
+#include "../../include/storage/Block.h"
+#include "../../include/iterator/BlockIterator.h"
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <memory>

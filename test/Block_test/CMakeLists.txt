@@ -43,8 +43,8 @@ find_package(GTest REQUIRED)
 
 # 添加源文件
 set(SOURCE_FILES
-    ../../src/Block.cpp
-    ../../src/BlockIterator.cpp
+    ../../src/storage/Block.cpp
+    ../../src/iterator/BlockIterator.cpp
 )
 
 # 创建测试可执行文件

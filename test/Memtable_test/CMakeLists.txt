@@ -59,9 +59,9 @@ find_package(GTest REQUIRED)
 # 创建测试可执行文件
 add_executable(memtable_test
     t_memtest.cpp
-    ../../src/memtable.cpp
-    ../../src/Skiplist.cpp
-    ../../src/Baselterator.cpp
+    ../../src/core/memtable.cpp
+    ../../src/core/Skiplist.cpp
+    ../../src/iterator/Baselterator.cpp
 )
 
 # 添加头文件路径
