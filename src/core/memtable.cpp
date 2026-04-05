@@ -296,6 +296,9 @@ std::list<std::unique_ptr<Skiplist>> MemTable::flushsync() {
 }
 void MemTable::frozen_cur_table() {
   std::unique_lock<std::shared_mutex> lock(cur_lock_);
+   if (current_table->get_size() < Global_::MAX_MEMTABLE_SIZE_PER_TABLE) {
+    return; // 已经被其他线程处理过了
+  }
   auto                                new_table = std::make_unique<Skiplist>();
   fixed_bytes += current_table->get_size();
   std::unique_lock<std::shared_mutex> lock2(fix_lock_);
