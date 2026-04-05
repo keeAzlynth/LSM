@@ -61,37 +61,86 @@ size_t BloomFilter::hash(const std::string& key, size_t idx) const {
   auto [h1, h2] = hash_pair(key);
   return (h1 + idx * h2) % num_bits_;
 }
-
-// 编码布隆过滤器为 std::vector<uint8_t>
-std::vector<uint8_t> BloomFilter::encode() const {
-  const size_t header_size = sizeof(expected_elements_) + sizeof(false_positive_rate_) +
-                             sizeof(num_bits_) + sizeof(num_hashes_);
-  const size_t num_bytes  = (num_bits_ + 7) / 8;
-  const size_t total_size = header_size + num_bytes;
-
-  std::vector<uint8_t> data(total_size);  // 直接分配确定大小
-  auto*                ptr = data.data();
-
-  // 直接内存拷贝头部数据
-  std::memcpy(ptr, &expected_elements_, sizeof(expected_elements_));
-  ptr += sizeof(expected_elements_);
-
-  std::memcpy(ptr, &false_positive_rate_, sizeof(false_positive_rate_));
-  ptr += sizeof(false_positive_rate_);
-
-  std::memcpy(ptr, &num_bits_, sizeof(num_bits_));
-  ptr += sizeof(num_bits_);
-
-  std::memcpy(ptr, &num_hashes_, sizeof(num_hashes_));
-  ptr += sizeof(num_hashes_);
-
-  // 快速位编码
-  encode_bits_fast(ptr, num_bytes);
-
-  return data;
+size_t BloomFilter::encode_size() const {
+  return sizeof(expected_elements_)
+       + sizeof(false_positive_rate_)
+       + sizeof(num_bits_)
+       + sizeof(num_hashes_)
+       + (num_bits_ + 7) / 8;
 }
 
-// 优化的解码函数
+void BloomFilter::encode_bits_fast(uint8_t* ptr, size_t num_bytes) const {
+  const size_t full_bytes = num_bits_ / 8;
+  const size_t rem_bits   = num_bits_ % 8;
+
+  for (size_t i = 0; i < full_bytes; ++i) {
+    const size_t b = i * 8;
+    *ptr++ = (bits_[b]     ? 0x01 : 0)
+           | (bits_[b + 1] ? 0x02 : 0)
+           | (bits_[b + 2] ? 0x04 : 0)
+           | (bits_[b + 3] ? 0x08 : 0)
+           | (bits_[b + 4] ? 0x10 : 0)
+           | (bits_[b + 5] ? 0x20 : 0)
+           | (bits_[b + 6] ? 0x40 : 0)
+           | (bits_[b + 7] ? 0x80 : 0);
+  }
+
+  if (rem_bits > 0) {
+    uint8_t      byte = 0;
+    const size_t b    = full_bytes * 8;
+    for (size_t j = 0; j < rem_bits; ++j) {
+      if (bits_[b + j]) byte |= (1u << j);
+    }
+    *ptr = byte;
+  }
+}
+
+void BloomFilter::decode_bits_fast(const uint8_t* ptr, size_t num_bytes) {
+  const size_t full_bytes = num_bits_ / 8;
+  const size_t rem_bits   = num_bits_ % 8;
+
+  for (size_t i = 0; i < full_bytes; ++i) {
+    const uint8_t byte = *ptr++;
+    const size_t  b    = i * 8;
+    bits_[b]     = (byte & 0x01) != 0;
+    bits_[b + 1] = (byte & 0x02) != 0;
+    bits_[b + 2] = (byte & 0x04) != 0;
+    bits_[b + 3] = (byte & 0x08) != 0;
+    bits_[b + 4] = (byte & 0x10) != 0;
+    bits_[b + 5] = (byte & 0x20) != 0;
+    bits_[b + 6] = (byte & 0x40) != 0;
+    bits_[b + 7] = (byte & 0x80) != 0;
+  }
+
+  if (rem_bits > 0) {
+    const uint8_t byte = *ptr;
+    const size_t  b    = full_bytes * 8;
+    for (size_t j = 0; j < rem_bits; ++j) {
+      bits_[b + j] = (byte & (1u << j)) != 0;
+    }
+  }
+}
+
+size_t BloomFilter::encode_into(uint8_t* dst) const {
+  uint8_t* ptr = dst;
+
+  std::memcpy(ptr, &expected_elements_,   sizeof(expected_elements_));   ptr += sizeof(expected_elements_);
+  std::memcpy(ptr, &false_positive_rate_, sizeof(false_positive_rate_)); ptr += sizeof(false_positive_rate_);
+  std::memcpy(ptr, &num_bits_,            sizeof(num_bits_));            ptr += sizeof(num_bits_);
+  std::memcpy(ptr, &num_hashes_,          sizeof(num_hashes_));          ptr += sizeof(num_hashes_);
+
+  const size_t num_bytes = (num_bits_ + 7) / 8;
+  encode_bits_fast(ptr, num_bytes);
+
+  return static_cast<size_t>(ptr - dst) + num_bytes;
+}
+
+std::vector<uint8_t> BloomFilter::encode() const {
+  std::vector<uint8_t> buf(encode_size());
+  encode_into(buf.data());
+  return buf;
+}
+
 BloomFilter BloomFilter::decode(const std::vector<uint8_t>& data) {
   if (data.size() < sizeof(size_t) * 3 + sizeof(double)) {
     throw std::runtime_error("Invalid data size");
@@ -100,83 +149,19 @@ BloomFilter BloomFilter::decode(const std::vector<uint8_t>& data) {
   const auto* ptr = data.data();
   BloomFilter bf;
 
-  // 直接内存拷贝解码
-  std::memcpy(&bf.expected_elements_, ptr, sizeof(bf.expected_elements_));
-  ptr += sizeof(bf.expected_elements_);
+  std::memcpy(&bf.expected_elements_,   ptr, sizeof(bf.expected_elements_));   ptr += sizeof(bf.expected_elements_);
+  std::memcpy(&bf.false_positive_rate_, ptr, sizeof(bf.false_positive_rate_)); ptr += sizeof(bf.false_positive_rate_);
+  std::memcpy(&bf.num_bits_,            ptr, sizeof(bf.num_bits_));            ptr += sizeof(bf.num_bits_);
+  std::memcpy(&bf.num_hashes_,          ptr, sizeof(bf.num_hashes_));          ptr += sizeof(bf.num_hashes_);
 
-  std::memcpy(&bf.false_positive_rate_, ptr, sizeof(bf.false_positive_rate_));
-  ptr += sizeof(bf.false_positive_rate_);
-
-  std::memcpy(&bf.num_bits_, ptr, sizeof(bf.num_bits_));
-  ptr += sizeof(bf.num_bits_);
-
-  std::memcpy(&bf.num_hashes_, ptr, sizeof(bf.num_hashes_));
-  ptr += sizeof(bf.num_hashes_);
-
-  // 验证数据完整性
   const size_t expected_bytes = (bf.num_bits_ + 7) / 8;
   const size_t header_size    = ptr - data.data();
   if (data.size() != header_size + expected_bytes) {
     throw std::invalid_argument("Data size mismatch");
   }
 
-  // 快速位解码
   bf.bits_.resize(bf.num_bits_);
   bf.decode_bits_fast(ptr, expected_bytes);
 
   return bf;
-}
-
-void BloomFilter::encode_bits_fast(uint8_t* ptr, size_t num_bytes) const {
-  // 如果 bits_ 使用普通 bool 数组或 bitset，可以进一步优化
-  for (size_t i = 0; i < num_bytes; ++i) {
-    uint8_t      byte      = 0;
-    const size_t bit_start = i * 8;
-
-    // 手动展开最常见的情况
-    if (bit_start < num_bits_ && bits_[bit_start])
-      byte |= 0x01;
-    if (bit_start + 1 < num_bits_ && bits_[bit_start + 1])
-      byte |= 0x02;
-    if (bit_start + 2 < num_bits_ && bits_[bit_start + 2])
-      byte |= 0x04;
-    if (bit_start + 3 < num_bits_ && bits_[bit_start + 3])
-      byte |= 0x08;
-    if (bit_start + 4 < num_bits_ && bits_[bit_start + 4])
-      byte |= 0x10;
-    if (bit_start + 5 < num_bits_ && bits_[bit_start + 5])
-      byte |= 0x20;
-    if (bit_start + 6 < num_bits_ && bits_[bit_start + 6])
-      byte |= 0x40;
-    if (bit_start + 7 < num_bits_ && bits_[bit_start + 7])
-      byte |= 0x80;
-
-    *ptr++ = byte;
-  }
-}
-
-// 快速位解码
-void BloomFilter::decode_bits_fast(const uint8_t* ptr, size_t num_bytes) {
-  for (size_t i = 0; i < num_bytes; ++i) {
-    const uint8_t byte      = *ptr++;
-    const size_t  bit_start = i * 8;
-
-    // 正确的位解码
-    if (bit_start < num_bits_)
-      bits_[bit_start] = (byte & 0x01) != 0;
-    if (bit_start + 1 < num_bits_)
-      bits_[bit_start + 1] = (byte & 0x02) != 0;
-    if (bit_start + 2 < num_bits_)
-      bits_[bit_start + 2] = (byte & 0x04) != 0;
-    if (bit_start + 3 < num_bits_)
-      bits_[bit_start + 3] = (byte & 0x08) != 0;
-    if (bit_start + 4 < num_bits_)
-      bits_[bit_start + 4] = (byte & 0x10) != 0;
-    if (bit_start + 5 < num_bits_)
-      bits_[bit_start + 5] = (byte & 0x20) != 0;
-    if (bit_start + 6 < num_bits_)
-      bits_[bit_start + 6] = (byte & 0x40) != 0;
-    if (bit_start + 7 < num_bits_)
-      bits_[bit_start + 7] = (byte & 0x80) != 0;
-  }
 }
