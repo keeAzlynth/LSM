@@ -119,7 +119,7 @@ std::shared_ptr<Block> Sstable::read_block(size_t block_idx) {
   return block_res;
 }
 
-std::optional<size_t> Sstable::find_block_idx(const std::string& key, bool is_prefix) {
+std::optional<size_t> Sstable::find_block_idx(std::string_view key, bool is_prefix) {
   if (!is_prefix) {
     // 精确查询：先在布隆过滤器判断key是否存在
     if (bloom_filter != nullptr && !bloom_filter->possibly_contains(key)) {
@@ -163,7 +163,7 @@ std::optional<size_t> Sstable::find_block_idx(const std::string& key, bool is_pr
     return result;
   }
 }
-std::vector<std::shared_ptr<Block>> Sstable::find_block_range(const std::string& key_prefix) {
+std::vector<std::shared_ptr<Block>> Sstable::find_block_range(std::string_view key_prefix) {
   std::vector<std::shared_ptr<Block>> result;
   if ((key_prefix < first_key && !first_key.starts_with(key_prefix)) || key_prefix > last_key) {
     return result;
@@ -173,11 +173,11 @@ std::vector<std::shared_ptr<Block>> Sstable::find_block_range(const std::string&
   if (!res1.has_value()) return result;
   
   result.push_back(read_block(res1.value()));
-  
+  std::string key_prefix_end = std::string(key_prefix) + '\xFF';
   for (int index = res1.value() + 1; index < (int)block_metas.size(); index++) {
     // block的first_key还在前缀范围内，继续收集
     if (block_metas[index].first_key_.starts_with(key_prefix) ||
-        block_metas[index].first_key_ < key_prefix + '\xff') {
+        block_metas[index].first_key_ < key_prefix_end) {
       result.push_back(read_block(index));
     } else {
       break;  // ← break放在这里，超出范围才停止
@@ -209,7 +209,7 @@ std::string Sstable::get_last_key() const {
 bool Sstable::is_block_index_vaild(size_t block_idx) const {
   return block_idx < block_metas.size() ? true : false;
 }
-bool Sstable::KeyExists(std::string key) {
+bool Sstable::KeyExists(std::string_view key) {
   if (key < first_key || key > last_key) {
     return false;
   }
@@ -224,7 +224,7 @@ bool Sstable::KeyExists(std::string key) {
   auto block = read_block(block_idx_opt.value());
   return block->KeyExists(key);
 }
-SstIterator Sstable::get_Iterator(const std::string& key, uint64_t tranc_id, bool is_prefix) {
+SstIterator Sstable::get_Iterator(std::string_view key, uint64_t tranc_id, bool is_prefix) {
   if (!is_prefix) {
     if (key < first_key || key > last_key) {
       return end();
@@ -233,7 +233,7 @@ SstIterator Sstable::get_Iterator(const std::string& key, uint64_t tranc_id, boo
     if (bloom_filter != nullptr && !bloom_filter->possibly_contains(key)) {
       return end();
     }
-    return SstIterator(shared_from_this(), key, tranc_id);
+    return SstIterator(shared_from_this(), std::string(key), tranc_id);
   }
   if ((key < first_key && !first_key.starts_with(key)) || key > last_key) {
     return end();
@@ -241,7 +241,7 @@ SstIterator Sstable::get_Iterator(const std::string& key, uint64_t tranc_id, boo
   if (first_key.starts_with(key)) {
     return begin(tranc_id);
   }
-  return SstIterator(shared_from_this(), key, tranc_id, is_prefix);
+  return SstIterator(shared_from_this(), std::string(key), tranc_id, is_prefix);
 }
 
 SstIterator Sstable::current_Iterator(size_t block_idx, uint64_t tranc_id) {
@@ -267,7 +267,7 @@ std::pair<uint64_t, uint64_t> Sstable::get_tranc_id_range() const {
 }
 
 std::vector<std::tuple<std::string, std::string, uint64_t>> Sstable::get_prefix_range(
-    const std::string& key, uint64_t tranc_id) {
+    std::string_view key, uint64_t tranc_id) {
   std::vector<std::tuple<std::string, std::string, uint64_t>> res;
   if (key > last_key || (key < first_key && !first_key.starts_with(key))) {
     spdlog::info(

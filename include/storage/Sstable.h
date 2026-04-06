@@ -26,8 +26,8 @@ class Sstable : public std::enable_shared_from_this<Sstable> {
                                                      const std::string&          last_key,
                                                      std::shared_ptr<BlockCache> block_cache);
   std::shared_ptr<Block>   read_block(size_t block_idx);
-  std::optional<size_t>    find_block_idx(const std::string& key, bool is_prefix = false);
-  std::vector<std::shared_ptr<Block>>            find_block_range(const std::string& key_prefix);
+  std::optional<size_t>    find_block_idx(std::string_view key, bool is_prefix = false);
+  std::vector<std::shared_ptr<Block>>            find_block_range(std::string_view key_prefix);
   size_t                                         num_blocks() const;
   size_t                                         get_sst_size() const;
   size_t                                         get_sst_id() const;
@@ -35,14 +35,14 @@ class Sstable : public std::enable_shared_from_this<Sstable> {
   std::string                                    get_last_key() const;
   std::tuple<std::string, std::string, uint64_t> getValue() const;
   bool                                           is_block_index_vaild(size_t block_index) const;
-  bool                                           KeyExists(std::string key);
-  SstIterator get_Iterator(const std::string& key, uint64_t tranc_id = 0, bool is_prefix = false);
+  bool                                           KeyExists(std::string_view key);
+  SstIterator get_Iterator(std::string_view key, uint64_t tranc_id = 0, bool is_prefix = false);
   SstIterator current_Iterator(size_t block_idx, uint64_t tranc_id = 0);
   SstIterator begin(uint64_t tranc_id);
   SstIterator end();
   std::pair<uint64_t, uint64_t>                               get_tranc_id_range() const;
   std::vector<std::tuple<std::string, std::string, uint64_t>> get_prefix_range(
-      const std::string& key, uint64_t tranc_id);
+      std::string_view key, uint64_t tranc_id);
 
   std::vector<BlockMeta> block_metas;
   uint64_t               min_tranc_id;
