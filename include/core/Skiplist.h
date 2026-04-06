@@ -9,12 +9,17 @@
 #include <random>
 #include <shared_mutex>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
 #include "Global.h"
 
 class SkiplistIterator;
+struct LookupResult {
+    std::string_view value;
+    uint64_t transaction_id;
+};
 class Node {
  public:
   std::string                           key_;
@@ -22,10 +27,14 @@ class Node {
   std::unique_ptr<Node>                 next_;
   std::array<Node*, Global_::FIX_LEVEL> forward;
   uint64_t                              transaction_id;
-  Node(const std::string& key, const std::string& value, const uint64_t transaction_ids = 0)
-      : key_(key), value_(value), next_{}, transaction_id(transaction_ids) {
+  Node(std::string key, std::string value, const uint64_t transaction_ids = 0)
+      : key_(std::move(key)), value_(std::move(value)), next_{}, transaction_id(transaction_ids) {
     forward.fill(nullptr);
   }
+  Node(Node&&) noexcept = default;
+  Node& operator=(Node&&) noexcept = default;
+  Node(const Node&) = delete; 
+  Node& operator=(const Node&) = delete;
   auto operator<=>(const Node& other) const;
 };
 
@@ -55,15 +64,13 @@ class SkiplistIterator : public BaseIterator {
   Node* current;
 };
 
-inline int cmp(const std::string& a, const std::string& b) {
-  if (a < b) {
-    return -1;
-  }
-  if (a > b) {
-    return 1;
-  }
-  return 0;
+inline int cmp(std::string_view a, std::string_view b) {
+    auto res = a <=> b;
+    if (res < 0) return -1;
+    if (res > 0) return 1;
+    return 0;
 }
+
 class Skiplist {
  public:
   explicit Skiplist(int max_level_ = Global_::MAX_LEVEL)
@@ -91,12 +98,12 @@ class Skiplist {
     return *this;
   }
 
-  bool Insert(const std::string& key, const std::string& value, const uint64_t transaction_id = 0);
+  bool Insert(std::string key, std::string value, const uint64_t transaction_id = 0);
 
-  bool Delete(const std::string& key);
+  bool Delete(std::string_view key);
 
-  std::optional<std::string> Contain(const std::string& key, const uint64_t transaction_id = 0);
-  std::unique_ptr<Node>      Get(const std::string& key, const uint64_t transaction_id = 0);
+  std::optional<std::string> Contain(std::string_view key, const uint64_t transaction_id = 0);
+  std::optional<LookupResult>      Get(std::string_view key, const uint64_t transaction_id = 0);
   std::vector<std::pair<std::string, std::string>> flush();
   Node*            get_node(const std::string& key, const uint64_t transaction_id = 0);
   std::size_t      get_size();

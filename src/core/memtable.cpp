@@ -186,7 +186,7 @@ std::optional<std::pair<std::string, uint64_t>> MemTable::get(const std::string&
   std::shared_lock<std::shared_mutex> lock(cur_lock_);
   auto                                result = current_table->Get(key, transaction_id);
   if (result) {
-    return std::make_pair(result->value_, result->transaction_id);
+    return std::make_pair(std::string(result->value), result->transaction_id);
   }
 
   lock.unlock();
@@ -194,7 +194,7 @@ std::optional<std::pair<std::string, uint64_t>> MemTable::get(const std::string&
   for (const auto& fixed_table : fixed_tables) {
     auto result = fixed_table->Get(key, transaction_id);
     if (result) {
-      return std::make_pair(result->value_, result->transaction_id);
+      return std::make_pair(std::string(result->value), result->transaction_id);
     }
   }
   return std::nullopt;

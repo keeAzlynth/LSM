@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <memory>
+#include <string_view>
 
 auto Node::operator<=>(const Node& other) const {
   return key_ <=> other.key_;
@@ -62,7 +63,7 @@ std::tuple<std::string, std::string, uint64_t> SkiplistIterator::get_value_tranc
   return {std::string(), std::string(), 0};
 }
 
-bool Skiplist::Insert(const std::string& key, const std::string& value,
+bool Skiplist::Insert(std::string key,std::string value,
                       const uint64_t transaction_id) {
   std::array<Node*, Global_::FIX_LEVEL> update;
   update.fill(nullptr);
@@ -77,27 +78,29 @@ bool Skiplist::Insert(const std::string& key, const std::string& value,
   }
   // 拿到新的节点的高度
   int Newlevel = random_level();
+  if (Newlevel > current_level) {
+    for (int i = current_level; i < Newlevel; i++) {
+      update[i] = head.get();
+    }
+    current_level = Newlevel; // 提前更新 current_level
+  }
+  size_bytes += (key.size() + value.size() + sizeof(uint64_t) + 8 * (Global_::FIX_LEVEL + 1));
   // 创建新节点
   auto NewNode = std::make_unique<Node>(key, value, transaction_id);
   // 插入新节点
   for (int i = 0; i < Newlevel; i++) {
-    if (update[i]) {  // 确保 update[i] 不为空
       NewNode->forward[i]   = update[i]->forward[i];
       update[i]->forward[i] = NewNode.get();
-    }
   }
   NewNode->next_   = std::move(update[0]->next_);
   update[0]->next_ = std::move(NewNode);
   // 更新当前层级
   current_level = std::max(current_level, Newlevel);
-
-  // 更新内存占用
-  size_bytes += (key.size() + value.size() + sizeof(uint64_t) + 8 * (Global_::FIX_LEVEL + 1));
   nodecount++;
   return true;
 }
 
-bool Skiplist::Delete(const std::string& key) {
+bool Skiplist::Delete(std::string_view key) {
   auto                                  current = head.get();
   std::array<Node*, Global_::FIX_LEVEL> update{};
 
@@ -132,7 +135,7 @@ bool Skiplist::Delete(const std::string& key) {
   return true;
 }
 
-std::optional<std::string> Skiplist::Contain(const std::string& key,
+std::optional<std::string> Skiplist::Contain(std::string_view key,
                                              const uint64_t     transaction_id) {
   auto current = head.get();
   // 从最高层开始查找
@@ -160,7 +163,7 @@ std::optional<std::string> Skiplist::Contain(const std::string& key,
   return std::nullopt;  // 如果没有找到，返回空值
 }
 
-std::unique_ptr<Node> Skiplist::Get(const std::string& key, const uint64_t transaction_id) {
+std::optional<LookupResult> Skiplist::Get(std::string_view key, const uint64_t transaction_id) {
   auto current = head.get();
   // 从最高层开始查找
   for (int i = current_level - 1; i >= 0; i--) {
@@ -171,7 +174,7 @@ std::unique_ptr<Node> Skiplist::Get(const std::string& key, const uint64_t trans
   if (current->forward[0] && cmp(current->forward[0]->key_, key) == 0) {
     if (transaction_id == 0) {
       current = current->forward[0];
-      return std::make_unique<Node>(current->key_, current->value_, current->transaction_id);
+      return  LookupResult(current->value_, current->transaction_id);
     } else {
       while (current->forward[0] && cmp(current->forward[0]->key_, key) == 0 &&
              current->forward[0]->transaction_id > transaction_id) {
@@ -179,14 +182,14 @@ std::unique_ptr<Node> Skiplist::Get(const std::string& key, const uint64_t trans
       }
       if (current->forward[0] && cmp(current->forward[0]->key_, key) == 0) {
         current = current->forward[0];
-        return std::make_unique<Node>(current->key_, current->value_, current->transaction_id);
+        return LookupResult(current->value_, current->transaction_id);
       } else if (cmp(current->key_, key) == 0 && current->transaction_id <= transaction_id) {
-        return std::make_unique<Node>(current->key_, current->value_, current->transaction_id);
+        return LookupResult(current->value_, current->transaction_id);
       }
-      return nullptr;
+      return std::nullopt;
     }
   }
-  return nullptr;  // 如果没有找到，返回空值
+  return std::nullopt;  // 如果没有找到，返回空值
 }
 
 std::vector<std::pair<std::string, std::string>> Skiplist::flush() {
