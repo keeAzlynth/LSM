@@ -44,7 +44,6 @@ class SkiplistIterator : public BaseIterator {
   friend bool operator==(const SkiplistIterator& lhs, const SkiplistIterator& rhs) noexcept;
 
  public:
-  using valuetype = std::pair<std::string, std::string>;
   SkiplistIterator(Node* skiplist);
   SkiplistIterator();
   ~SkiplistIterator() = default;
@@ -57,7 +56,7 @@ class SkiplistIterator : public BaseIterator {
   bool                                           isEnd() const override;
   IteratorType                                   type() const override;
   uint64_t                                       get_tranc_id() const override;
-  std::pair<std::string, std::string>            getValue() const;
+  valuetype            getValue() const;
   std::tuple<std::string, std::string, uint64_t> get_value_tranc_id() const;
 
  private:
@@ -105,18 +104,18 @@ class Skiplist {
   std::optional<std::string> Contain(std::string_view key, const uint64_t transaction_id = 0);
   std::optional<LookupResult>      Get(std::string_view key, const uint64_t transaction_id = 0);
   std::vector<std::pair<std::string, std::string>> flush();
-  Node*            get_node(const std::string& key, const uint64_t transaction_id = 0);
+  Node*            get_node(std::string_view key, const uint64_t transaction_id = 0);
   std::size_t      get_size();
   std::size_t      getnodecount();
-  int              get_range_index(const std::string& key);
+  int              get_range_index(std::string_view key);
   auto             seekToFirst();
   auto             seekToLast();
   SkiplistIterator end();
   SkiplistIterator begin();
-  SkiplistIterator prefix_serach_begin(const std::string& key);
-  SkiplistIterator prefix_serach_end(const std::string& key);
+  SkiplistIterator prefix_serach_begin(std::string_view key);
+  SkiplistIterator prefix_serach_end(std::string_view key);
   std::vector<std::tuple<std::string, std::string, uint64_t>> get_prefix_range(
-      const std::string& prefix, uint64_t tranc_id);
+      std::string_view prefix, uint64_t tranc_id);
 
   void                    set_status(Global_::SkiplistStatus status);
   Global_::SkiplistStatus get_status() const;

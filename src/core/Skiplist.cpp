@@ -26,7 +26,10 @@ bool operator==(const SkiplistIterator& lhs, const SkiplistIterator& rhs) noexce
 }
 
 SkiplistIterator::valuetype SkiplistIterator::operator*() const {
-  return {current->key_, current->value_};
+  if (current) {
+    return {current->key_, current->value_};
+  }
+  return {};
 }
 SkiplistIterator SkiplistIterator::operator+=(int offset) const {
   SkiplistIterator result = *this;
@@ -50,11 +53,11 @@ uint64_t SkiplistIterator::get_tranc_id() const {
   }
   return 0;
 }
-std::pair<std::string, std::string> SkiplistIterator::getValue() const {
+SkiplistIterator::valuetype SkiplistIterator::getValue() const {
   if (current) {
     return {current->key_, current->value_};
   }
-  return {std::string(), std::string()};
+  return {};
 }
 std::tuple<std::string, std::string, uint64_t> SkiplistIterator::get_value_tranc_id() const {
   if (current) {
@@ -201,7 +204,7 @@ std::vector<std::pair<std::string, std::string>> Skiplist::flush() {
   }
   return result;
 }
-Node* Skiplist::get_node(const std::string& key, const uint64_t transaction_id) {
+Node* Skiplist::get_node(std::string_view key, const uint64_t transaction_id) {
   auto current = head.get();
   // 从最高层开始查找
   for (int i = current_level - 1; i >= 0; i--) {
@@ -257,14 +260,14 @@ SkiplistIterator Skiplist::begin() {
   return SkiplistIterator(head->forward[0]);
 }
 
-SkiplistIterator Skiplist::prefix_serach_begin(const std::string& key) {
+SkiplistIterator Skiplist::prefix_serach_begin(std::string_view key) {
   auto current = head.get();
   for (int i = current_level - 1; i >= 0; --i) {
     while (current->forward[i] && cmp(current->forward[i]->key_, key) == -1) {
       current = current->forward[i];
     }
   }
-  if (current->key_.starts_with(key)) {
+  if (current && current->key_.starts_with(key)) {
     return SkiplistIterator(current);
   }
   if (current->forward[0] && current->forward[0]->key_.starts_with(key)) {
@@ -272,8 +275,9 @@ SkiplistIterator Skiplist::prefix_serach_begin(const std::string& key) {
   }
   return SkiplistIterator(nullptr);
 }
-SkiplistIterator Skiplist::prefix_serach_end(const std::string& key) {
-  auto Newkey  = key + '\xFF';
+SkiplistIterator Skiplist::prefix_serach_end(std::string_view key) {
+  std::string Newkey{key};
+  Newkey += '\xFF';
   auto current = head.get();
   for (int i = current_level - 1; i >= 0; --i) {
     while (current->forward[i] && cmp(current->forward[i]->key_, Newkey) == -1) {
@@ -283,7 +287,7 @@ SkiplistIterator Skiplist::prefix_serach_end(const std::string& key) {
   return SkiplistIterator(current->forward[0]);
 }
 std::vector<std::tuple<std::string, std::string, uint64_t>> Skiplist::get_prefix_range(
-    const std::string& prefix, uint64_t tranc_id) {
+    std::string_view prefix, uint64_t tranc_id) {
   auto                                                        end = prefix_serach_end(prefix);
   std::vector<std::tuple<std::string, std::string, uint64_t>> result;
   for (auto begin = prefix_serach_begin(prefix); begin != end; ++begin) {
