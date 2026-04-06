@@ -147,7 +147,7 @@ std::string Block::get_first_key() {
   return get_key(Offset_[0]);
 }
 
-std::optional<std::pair<size_t, size_t>> Block::get_offset_binary(const std::string& key,
+std::optional<std::pair<size_t, size_t>> Block::get_offset_binary(std::string_view key,
                                                                   const uint64_t     tranc_id) {
   if (Offset_.empty()) {
     return std::nullopt;
@@ -171,7 +171,7 @@ std::optional<std::pair<size_t, size_t>> Block::get_offset_binary(const std::str
 }
 
 std::optional<std::pair<size_t, size_t>> Block::get_prefix_begin_offset_binary(
-    const std::string& key_prefix) {
+    std::string_view key_prefix) {
   if (Offset_.empty())
     return std::nullopt;
 
@@ -208,14 +208,15 @@ std::optional<std::pair<size_t, size_t>> Block::get_prefix_begin_offset_binary(
 }
 
 std::optional<std::pair<size_t, size_t>> Block::get_prefix_end_offset_binary(
-    const std::string& key_prefix) {
+    std::string_view key_prefix) {
   if (Offset_.empty()) {
     return std::nullopt;
   }
   int         left           = 0;
   int         right          = Offset_.size() - 1;
   int         result_idx     = -1;
-  std::string key_prefix_end = key_prefix + '\xFF';
+  std::string key_prefix_str = std::string(key_prefix);
+  std::string key_prefix_end = key_prefix_str + '\xFF';
 
   while (left <= right) {
     int         mid     = left + (right - left) / 2;
@@ -237,7 +238,7 @@ std::optional<std::pair<size_t, size_t>> Block::get_prefix_end_offset_binary(
 }
 
 std::vector<std::tuple<std::string, std::string, uint64_t>> Block::get_prefix_tran_id(
-    const std::string& key, const uint64_t tranc_id) {
+    std::string_view key, const uint64_t tranc_id) {
   std::vector<std::tuple<std::string, std::string, uint64_t>> retrieved_data;
   auto result1 = get_prefix_begin_offset_binary(key);
   if (!result1.has_value()) {
@@ -287,7 +288,7 @@ size_t Block::get_cur_size() const {
   return Data_.size() + Offset_.size() * sizeof(uint16_t) + sizeof(uint16_t);
 }
 
-std::optional<std::string> Block::get_value_binary(const std::string& key) {
+std::optional<std::string> Block::get_value_binary(std::string_view key) {
   auto idx = get_offset_binary(key);
   if (idx.has_value()) {
     return get_value(idx->first);
@@ -295,7 +296,7 @@ std::optional<std::string> Block::get_value_binary(const std::string& key) {
   return std::nullopt;
 }
 
-bool Block::KeyExists(const std::string& key) {
+bool Block::KeyExists(std::string_view key) {
   auto idx = get_offset_binary(key);
   return idx.has_value();
 }
@@ -366,7 +367,7 @@ void Block::print_debug() const {
   }
 }
 
-BlockIterator Block::get_iterator(const std::string& key, const uint64_t tranc_id) {
+BlockIterator Block::get_iterator(std::string_view key, const uint64_t tranc_id) {
   auto idx = get_offset_binary(key, tranc_id);
   if (!idx.has_value()) {
     return end();
