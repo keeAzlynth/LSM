@@ -6,6 +6,7 @@
 #include "iterator/TmergeIterator.h"
 #include "transaction/transaction.h"
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -14,6 +15,7 @@
 #include <string>
 #include <tuple>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include <print>
 
@@ -29,7 +31,7 @@ class LSM_Engine : public std::enable_shared_from_this<LSM_Engine> {
   std::shared_mutex                                    ssts_mtx;
   std::shared_ptr<BlockCache>                          block_cache;
   std::weak_ptr<TranManager>                           tran_manager;
-  size_t                                               next_sst_id   = 0;
+  std::atomic_size_t                                               next_sst_id   = 0;
   size_t                                               cur_max_level = 0;
 
  public:
@@ -38,7 +40,7 @@ class LSM_Engine : public std::enable_shared_from_this<LSM_Engine> {
   ~LSM_Engine() = default;
   std::vector<std::tuple<std::string, std::string, uint64_t>> get_prefix_range(
       const std::string& prefix, uint64_t tranc_id);
-
+    std::vector<std::pair<std::string,std::string>> print_level_range(size_t level);
   std::optional<std::pair<std::string, uint64_t>> get(const std::string& key,
                                                       uint64_t           tranc_id = 0);
   std::vector<std::tuple<std::string, std::optional<std::string>, uint64_t>> get_batch(
@@ -92,6 +94,7 @@ class LSM {
  public:
   LSM(std::string path);
   ~LSM();
+   void print_level_range(size_t level);
 
   std::optional<std::string>                                      get(const std::string& key);
   std::vector<std::pair<std::string, std::optional<std::string>>> get_batch(

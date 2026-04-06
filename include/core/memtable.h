@@ -51,6 +51,7 @@ class MemTableIterator : public BaseIterator {
 class MemTable {
   friend class MemTableIterator;  // 让 MemTableIterator 可以访问私有成员
   friend class TranContext;
+  friend class LSM_Engine;
 
  public:
   MemTable();
@@ -83,7 +84,7 @@ class MemTable {
   std::unique_ptr<Skiplist>            flushtodisk();
   std::unique_ptr<Skiplist>            flush();
   std::list<std::unique_ptr<Skiplist>> flushsync();
-  void                                 frozen_cur_table();
+  bool                                 frozen_cur_table(bool force = false);
   MemTableIterator                     begin();
   MemTableIterator                     end();
   MemTableIterator prefix_serach(const std::string& key, const uint64_t transaction_id = 0);

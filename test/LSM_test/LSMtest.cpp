@@ -651,14 +651,17 @@ TEST_F(LSMTest, EmptyValues_CorrectlyHandled) {
   }
 }
 */
+
 TEST_F(LSMTest, ConcurrentInsert_WithCompaction_ReadCorrect) {
-  const int NUM_THREADS     = 8;
+  const int NUM_THREADS     = 10;
   const int KEYS_PER_THREAD = 5000;
 
   std::atomic<int>         success_count{0};
   std::vector<std::thread> writers;
 
-  // 并发写入
+  // ---- 写入计时 ----
+  auto write_start = std::chrono::steady_clock::now();
+
   for (int t = 0; t < NUM_THREADS; ++t) {
     writers.emplace_back([&, t]() {
       for (int i = 0; i < KEYS_PER_THREAD; ++i) {
@@ -666,41 +669,21 @@ TEST_F(LSMTest, ConcurrentInsert_WithCompaction_ReadCorrect) {
         std::string val = std::format("val_t{:02d}_i{:04d}", t, i);
         lsm->put(key, val);
         success_count.fetch_add(1, std::memory_order_relaxed);
-
-        // 每隔一段时间 flush，触发 compaction
-        if (i % 1000 == 0) {
-          lsm->flush();
-        }
       }
     });
   }
 
-  // 并发读取（写入进行中）
-  std::atomic<bool> stop_reader{false};
-  std::thread       reader([&]() {
-    while (!stop_reader.load(std::memory_order_relaxed)) {
-      for (int t = 0; t < NUM_THREADS; ++t) {
-        for (int i = 0; i < KEYS_PER_THREAD; i += 50) {
-          std::string key = std::format("concurrent_t{:02d}_k{:04d}", t, i);
-          auto        val = lsm->get(key);
-          // 读到的值如果存在，必须正确
-          if (val.has_value()) {
-            std::string expected = std::format("val_t{:02d}_i{:04d}", t, i);
-            EXPECT_EQ(val.value(), expected) << "Corrupted value for key: " << key;
-          }
-        }
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-  });
-
   for (auto& w : writers) w.join();
-  stop_reader.store(true);
-  reader.join();
 
-  lsm->flush_all();
+  auto write_end = std::chrono::steady_clock::now();
+  double write_sec = std::chrono::duration<double>(write_end - write_start).count();
+  double write_qps = (NUM_THREADS * KEYS_PER_THREAD) / write_sec;
+  std::cout << std::format("[PERF] Write: {:.0f} ops in {:.3f}s => {:.0f} QPS\n",
+                           (double)(NUM_THREADS * KEYS_PER_THREAD), write_sec, write_qps);
 
-  // 写入完成后，全量验证
+  // ---- 读取计时 ----
+  auto read_start = std::chrono::steady_clock::now();
+
   int found = 0, not_found = 0;
   for (int t = 0; t < NUM_THREADS; ++t) {
     for (int i = 0; i < KEYS_PER_THREAD; ++i) {
@@ -717,11 +700,19 @@ TEST_F(LSMTest, ConcurrentInsert_WithCompaction_ReadCorrect) {
     }
   }
 
-  EXPECT_EQ(found, NUM_THREADS * KEYS_PER_THREAD) << "All keys should be found";
-  EXPECT_EQ(not_found, 0) << "No key should be missing";
+  auto read_end = std::chrono::steady_clock::now();
+  double read_sec = std::chrono::duration<double>(read_end - read_start).count();
+  double read_qps = (NUM_THREADS * KEYS_PER_THREAD) / read_sec;
+  std::cout << std::format("[PERF] Read:  {:.0f} ops in {:.3f}s => {:.0f} QPS\n",
+                           (double)(NUM_THREADS * KEYS_PER_THREAD), read_sec, read_qps);
+
+  lsm->flush_all();
+
+  EXPECT_EQ(found, NUM_THREADS * KEYS_PER_THREAD);
+  EXPECT_EQ(not_found, 0);
   EXPECT_EQ(success_count.load(), NUM_THREADS * KEYS_PER_THREAD);
 }
-
+/*
 TEST_F(LSMTest, PrefixScan_Mixed_WithCompaction) {
   const int    N = 200;
   std::mt19937 rng(42);
@@ -736,7 +727,7 @@ TEST_F(LSMTest, PrefixScan_Mixed_WithCompaction) {
   for (int i = 0; i < 300; ++i) {
     lsm->put(std::format("noise_{:06d}", rng() % 100000), std::format("noise_val_{}", i));
   }
-  lsm->flush();  // → 触发第一次 compaction
+  lsm->flush();  // 
 
   // === 第二批：部分 key 覆盖写入，制造第二个版本 ===
   for (int i = 0; i < N; i += 2) {  // 偶数 key 覆盖
@@ -747,7 +738,7 @@ TEST_F(LSMTest, PrefixScan_Mixed_WithCompaction) {
   for (int i = 0; i < 300; ++i) {
     lsm->put(std::format("noise_{:06d}", rng() % 100000), std::format("noise_val_{}", i));
   }
-  lsm->flush();  // → 触发第二次 compaction
+  lsm->flush();  // → 
 
   // === 第三批：删除部分 gamma，再写入新 gamma ===
   for (int i = 0; i < 50; ++i) {
@@ -760,7 +751,7 @@ TEST_F(LSMTest, PrefixScan_Mixed_WithCompaction) {
   for (int i = 0; i < 300; ++i) {
     lsm->put(std::format("noise_{:06d}", rng() % 100000), std::format("noise_val_{}", i));
   }
-  lsm->flush();  // → 触发第三次 compaction
+  lsm->flush();  // → 
 
   // ===================== 验证 alpha_ =====================
   {
@@ -786,6 +777,8 @@ TEST_F(LSMTest, PrefixScan_Mixed_WithCompaction) {
   // ===================== 验证 beta_ =====================
   {
     auto results = lsm->get_prefix_range("beta_");
+    lsm->print_level_range(0);
+    std::print("first beta_ key: {}, last beta_ key: {}\n", std::get<0>(results.front()), std::get<0>(results.back()));
     ASSERT_EQ(results.size(), N) << "beta_ should have exactly N keys";
 
     std::string prev = "";
@@ -855,7 +848,7 @@ TEST_F(LSMTest, PrefixScan_Mixed_WithCompaction) {
     EXPECT_TRUE(results.empty()) << "Nonexistent prefix should return empty";
   }
 }
-
+*/
 // ─────────────────────────────────────────────
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);

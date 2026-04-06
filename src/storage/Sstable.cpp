@@ -166,22 +166,26 @@ std::optional<size_t> Sstable::find_block_idx(const std::string& key, bool is_pr
 std::vector<std::shared_ptr<Block>> Sstable::find_block_range(const std::string& key_prefix) {
   std::vector<std::shared_ptr<Block>> result;
   if ((key_prefix < first_key && !first_key.starts_with(key_prefix)) || key_prefix > last_key) {
-    return result;  // 前缀超出范围，返回空
-  };
-  auto res1 = find_block_idx(key_prefix, true);
-  if (res1.has_value()) {
-    result.push_back(read_block(res1.value()));
-    for (int index = res1.value() + 1; index < block_metas.size(); index++) {
-      if (block_metas[index].last_key_ <= key_prefix) {
-        result.push_back(read_block(index));
-      }
-      break;
-    }
     return result;
   }
+  
+  auto res1 = find_block_idx(key_prefix, true);
+  if (!res1.has_value()) return result;
+  
+  result.push_back(read_block(res1.value()));
+  
+  for (int index = res1.value() + 1; index < (int)block_metas.size(); index++) {
+    // block的first_key还在前缀范围内，继续收集
+    if (block_metas[index].first_key_.starts_with(key_prefix) ||
+        block_metas[index].first_key_ < key_prefix + '\xff') {
+      result.push_back(read_block(index));
+    } else {
+      break;  // ← break放在这里，超出范围才停止
+    }
+  }
+  
   return result;
 }
-
 size_t Sstable::num_blocks() const {
   return block_metas.size();
 }

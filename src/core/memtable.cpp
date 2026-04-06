@@ -143,6 +143,7 @@ bool MemTableIterator::valid() const {
 }
 std::vector<std::tuple<std::string, std::string, uint64_t>> MemTable::get_prefix_range(
     const std::string& prefix, uint64_t tranc_id) {
+ std::shared_lock<std::shared_mutex> lock(cur_lock_); 
   return current_table->get_prefix_range(prefix, tranc_id);
 }
 void MemTable::clear() {
@@ -158,12 +159,16 @@ void MemTable::put(const std::string& key, const std::string& value,
 
 void MemTable::put_mutex(const std::string& key, const std::string& value,
                          const uint64_t transaction_id) {
+    bool need_freeze = false;
   {
     std::unique_lock<std::shared_mutex> lock(cur_lock_);
     current_table->Insert(key, value, transaction_id);
-  }
   if (current_table->get_size() > Global_::MAX_MEMTABLE_SIZE_PER_TABLE) {
-    frozen_cur_table();
+    need_freeze = true;
+  }
+}
+if (need_freeze) {
+    frozen_cur_table();  // 内部自己拿 cur_lock_，多线程同时进来也安全
   }
 }
 void MemTable::put_batch(const std::vector<std::pair<std::string, std::string>>& key_value_pairs,
@@ -271,6 +276,9 @@ bool MemTable::IsFull() {
 }
 std::unique_ptr<Skiplist> MemTable::flushtodisk() {
   std::unique_lock<std::shared_mutex> lock(fix_lock_);
+  if (fixed_tables.empty()) {
+  return nullptr;
+  }
   auto                                temp = std::move(fixed_tables.front());
   fixed_tables.pop_front();
   fixed_bytes -= temp->get_size();
@@ -294,16 +302,28 @@ std::list<std::unique_ptr<Skiplist>> MemTable::flushsync() {
   current_table = std::move(new_table);
   return std::move(fixed_tables);
 }
-void MemTable::frozen_cur_table() {
+bool MemTable::frozen_cur_table(bool force) {
   std::unique_lock<std::shared_mutex> lock(cur_lock_);
-   if (current_table->get_size() < Global_::MAX_MEMTABLE_SIZE_PER_TABLE) {
-    return; // 已经被其他线程处理过了
+  
+  // 空表不冻结，无论是否 force
+  if (current_table->get_size() == 0) {
+    return false;
   }
-  auto                                new_table = std::make_unique<Skiplist>();
+  
+  if (!force && current_table->get_size() < Global_::MAX_MEMTABLE_SIZE_PER_TABLE) {
+    return false;
+  }
+  
+  auto new_table = std::make_unique<Skiplist>();
   fixed_bytes += current_table->get_size();
-  std::unique_lock<std::shared_mutex> lock2(fix_lock_);
-  fixed_tables.push_back(std::move(current_table));
+  current_table->set_status(Global_::SkiplistStatus::kFrozen);
+  {
+    std::unique_lock<std::shared_mutex> lock2(fix_lock_);
+    fixed_tables.push_back(std::move(current_table));
+  }
+
   current_table = std::move(new_table);
+  return true;
 }
 
 MemTableIterator MemTable::begin() {

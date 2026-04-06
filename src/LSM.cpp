@@ -4,6 +4,7 @@
 #include <cmath>
 #include <filesystem>
 #include <optional>
+#include <print>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -56,7 +57,7 @@ LSM_Engine::LSM_Engine(std::string path, size_t block_cache_capacity, size_t blo
       // 加载SST文件, 初始化时需要加写锁
       std::unique_lock<std::shared_mutex> lock(ssts_mtx);  // 写锁
 
-      next_sst_id          = std::max(sst_id, next_sst_id);   // 记录目前最大的 sst_id
+      next_sst_id          = std::max(sst_id, next_sst_id.load());   // 记录目前最大的 sst_id
       cur_max_level        = std::max(level, cur_max_level);  // 记录目前最大的 level
       std::string sst_path = get_sst_path(sst_id, level);
       auto        sst      = Sstable::open(sst_id, FileObj::open(sst_path, false), block_cache);
@@ -81,7 +82,6 @@ LSM_Engine::LSM_Engine(std::string path, size_t block_cache_capacity, size_t blo
 // Engine 层：在所有层中收集前缀匹配的键值对，合并去重后返回
 std::vector<std::tuple<std::string, std::string, uint64_t>> LSM_Engine::get_prefix_range(
     const std::string& prefix, uint64_t tranc_id_) {
-  // 用 map 保存结果：key -> (value, tranc_id)，高层覆盖低层
   std::unordered_map<std::string, std::pair<std::string, uint64_t>> merged;
 
   // 1. 从 memtable 中查找前缀匹配
@@ -97,13 +97,13 @@ std::vector<std::tuple<std::string, std::string, uint64_t>> LSM_Engine::get_pref
     auto& sst     = ssts[sst_id];
     auto  results = sst->get_prefix_range(prefix, tranc_id_);
     for (auto& [key, value, tranc_id] : results) {
-      // 只有 map 中没有，或者 tranc_id 更新时才覆盖
       auto it = merged.find(key);
       if (it == merged.end() || it->second.second < tranc_id) {
         merged[key] = {value, tranc_id};
       }
     }
   }
+// L0扫描...
 
   // 3. 从 L1 到 cur_max_level 查找
   for (size_t level = 1; level <= cur_max_level; ++level) {
@@ -111,24 +111,14 @@ std::vector<std::tuple<std::string, std::string, uint64_t>> LSM_Engine::get_pref
     if (sst_ids.empty())
       continue;
 
-    // 二分定位第一个可能包含 prefix 的 SST
-    size_t left = 0, right = sst_ids.size();
-    while (left < right) {
-      size_t mid = left + (right - left) / 2;
-      if (ssts[sst_ids[mid]]->get_first_key() <= prefix) {
-        left = mid + 1;
-      } else {
-        right = mid;
-      }
-    }
-    // 从 left-1 开始，向后扫描所有 first_key <= prefix+\xff 的 SST
-    size_t start = (left == 0) ? 0 : left - 1;
+    // 构造前缀上界："alpha_" → "alpha`"
+    std::string prefix_end = prefix;
+    prefix_end.back()++;
 
-    for (size_t idx = start; idx < sst_ids.size(); ++idx) {
-      auto& sst = ssts[sst_ids[idx]];
-      // 若该 SST 的 first_key 已经超出前缀范围，停止
-      if (sst->get_first_key().substr(0, prefix.size()) > prefix)
-        break;
+    for (auto& sst_id : sst_ids) {
+      auto& sst = ssts[sst_id];
+      // first_key 已经超出前缀范围，停止
+      if (sst->get_first_key() >= prefix_end) break;
 
       auto results = sst->get_prefix_range(prefix, tranc_id_);
       for (auto& [key, value, tranc_id] : results) {
@@ -144,16 +134,32 @@ std::vector<std::tuple<std::string, std::string, uint64_t>> LSM_Engine::get_pref
   std::vector<std::tuple<std::string, std::string, uint64_t>> results;
   for (auto& [key, val_tranc] : merged) {
     auto& [value, tranc_id] = val_tranc;
-    if (!value.empty()) {  // 空字符串 = 删除标记，跳过
+    if (!value.empty()) {
       results.emplace_back(key, value, tranc_id);
     }
   }
-
-  // 按 key 排序保证有序输出
-  std::sort(results.begin(), results.end(),
-            [](const auto& a, const auto& b) { return std::get<0>(a) < std::get<0>(b); });
-
+  // L1扫描...
+  std::ranges::sort(results, [](const auto& a, const auto& b) {
+    if (std::get<0>(a) != std::get<0>(b)) {
+       return std::get<0>(a) < std::get<0>(b);  // 按 key 升序排序
+    }
+     return std::get<2>(a) > std::get<2>(b);  // 先按事务ID降序排序
+  });
   return results;
+}
+std::vector<std::pair<std::string,std::string>> LSM_Engine::print_level_range(size_t level) {
+    std::shared_lock<std::shared_mutex> lock_(ssts_mtx);
+    std::vector<std::pair<std::string,std::string>> result;
+    
+    auto it = level_sst_ids.find(level);
+    if (it == level_sst_ids.end()) return result;
+    
+    for (auto& sst_id : it->second) {
+        auto sst_it = ssts.find(sst_id);
+        if (sst_it == ssts.end() || !sst_it->second) continue;
+        result.emplace_back(sst_it->second->get_first_key(), sst_it->second->get_last_key());
+    }
+    return result;
 }
 std::optional<std::pair<std::string, uint64_t>> LSM_Engine::get(const std::string& key,
                                                                 uint64_t           tranc_id) {
@@ -390,38 +396,22 @@ std::optional<std::pair<std::string, uint64_t>> LSM_Engine::sst_get_(const std::
 
 uint64_t LSM_Engine::put(const std::string& key, const std::string& value, uint64_t tranc_id) {
   memtable->put_mutex(key, value, tranc_id);
-  // 如果 memtable 太大，需要刷新到磁盘
-  if (memtable->get_total_size() >= Global_::MAX_MEMTABLE_SIZE_PER_TABLE) {
-    return flush();
-  }
   return 0;
 }
 
 uint64_t LSM_Engine::put_batch(const std::vector<std::pair<std::string, std::string>>& kvs,
                                uint64_t                                                tranc_id) {
   memtable->put_batch(kvs, tranc_id);
-  // 如果 memtable 太大，需要刷新到磁盘
-  if (memtable->get_total_size() >= Global_::MAX_MEMTABLE_SIZE_PER_TABLE) {
-    return flush();
-  }
   return 0;
 }
 uint64_t LSM_Engine::remove(const std::string& key, uint64_t tranc_id) {
   // 在 LSM 中，删除实际上是插入一个空值
   memtable->remove(key, tranc_id);
-  // 如果 memtable 太大，需要刷新到磁盘
-  if (memtable->get_total_size() >= Global_::MAX_MEMTABLE_SIZE_PER_TABLE) {
-    return flush();
-  }
   return 0;
 }
 
 uint64_t LSM_Engine::remove_batch(const std::vector<std::string>& keys, uint64_t tranc_id) {
   memtable->remove_batch(keys, tranc_id);
-  // 如果 memtable 太大，需要刷新到磁盘
-  if (memtable->get_total_size() >= Global_::MAX_MEMTABLE_SIZE_PER_TABLE) {
-    return flush();
-  }
   return 0;
 }
 
@@ -450,7 +440,7 @@ uint64_t LSM_Engine::flush() {
   }
 
   // 2. 创建新的 SST ID
-  size_t new_sst_id = next_sst_id++;
+  size_t new_sst_id = ++next_sst_id;
 
   // 3. 准备 SSTBuilder
   Sstbuild builder(Global_::Block_SIZE,
@@ -461,12 +451,12 @@ uint64_t LSM_Engine::flush() {
   auto                  sst_path = get_sst_path(new_sst_id, 0);
 
   std::unique_lock<std::shared_mutex> lock(ssts_mtx);  // 写锁
-
-  if (memtable->get_fixed_size()==0) {
-  memtable->frozen_cur_table();
-  }
+  memtable->frozen_cur_table(true);
   auto res = memtable->flushtodisk();
   lock.unlock();  // 先释放锁，构建 SST 可能比较慢，期间不需要锁
+  if (!res) {
+  return 0;
+  }
   for (auto i = res->begin(); i != res->end(); ++i) {
     auto kv       = i.getValue();
     auto tranc_id = i.get_tranc_id();
@@ -474,10 +464,6 @@ uint64_t LSM_Engine::flush() {
   }
   auto new_sst = builder.build(block_cache, sst_path, new_sst_id);
   lock.lock();  // 重新加锁，更新内存索引
-  if (!new_sst) {
-    next_sst_id--;
-    return 0;
-  }
   // 5. 更新内存索引
   ssts[new_sst_id] = new_sst;
 
@@ -575,7 +561,7 @@ void LSM_Engine::full_compact(size_t src_level) {
   // 此处没必要reverse了
   std::sort(level_sst_ids[src_level + 1].begin(), level_sst_ids[src_level + 1].end());
   // 递归地判断下一级 level 是否需要 full compact
-  if (level_size[src_level+1]/1024/1024 >= 10*std::pow(10,src_level)) {
+  if (bytes_to_mb(level_size[src_level+1] ) >= 10*std::pow(10,src_level)) {
     full_compact(src_level + 1);
   }
 }
@@ -809,6 +795,13 @@ LSM::LSM(std::string path)
 LSM::~LSM() {
   flush_all();
   tran_manager_->write_tranc_id_file();
+}
+
+   void LSM::print_level_range(size_t level) {
+ auto res= engine->print_level_range(level);
+ for(auto& [key,value]:res){
+  std::print("key:{},value:{}\n",key,value);
+ }
 }
 
 std::optional<std::string> LSM::get(const std::string& key) {
