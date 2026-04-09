@@ -144,7 +144,7 @@ bool MemTableIterator::valid() const {
 }
 std::vector<std::tuple<std::string, std::string, uint64_t>> MemTable::get_prefix_range(
     std::string_view prefix, uint64_t tranc_id) {
- std::shared_lock<std::shared_mutex> lock(cur_lock_); 
+  std::shared_lock<std::shared_mutex> lock(cur_lock_);
   return current_table->get_prefix_range(prefix, tranc_id);
 }
 void MemTable::clear() {
@@ -160,15 +160,15 @@ void MemTable::put(const std::string& key, const std::string& value,
 
 void MemTable::put_mutex(const std::string& key, const std::string& value,
                          const uint64_t transaction_id) {
-    bool need_freeze = false;
+  bool need_freeze = false;
   {
     std::unique_lock<std::shared_mutex> lock(cur_lock_);
     current_table->Insert(key, value, transaction_id);
-  if (current_table->get_size() > Global_::MAX_MEMTABLE_SIZE_PER_TABLE) {
-    need_freeze = true;
+    if (current_table->get_size() > Global_::MAX_MEMTABLE_SIZE_PER_TABLE) {
+      need_freeze = true;
+    }
   }
-}
-if (need_freeze) {
+  if (need_freeze) {
     frozen_cur_table();  // 内部自己拿 cur_lock_，多线程同时进来也安全
   }
 }
@@ -183,7 +183,7 @@ void MemTable::put_batch(const std::vector<std::pair<std::string, std::string>>&
   }
 }
 std::optional<std::pair<std::string, uint64_t>> MemTable::get(std::string_view key,
-                                                              const uint64_t     transaction_id) {
+                                                              const uint64_t   transaction_id) {
   std::shared_lock<std::shared_mutex> lock(cur_lock_);
   auto                                result = current_table->Get(key, transaction_id);
   if (result) {
@@ -278,9 +278,9 @@ bool MemTable::IsFull() {
 std::unique_ptr<Skiplist> MemTable::flushtodisk() {
   std::unique_lock<std::shared_mutex> lock(fix_lock_);
   if (fixed_tables.empty()) {
-  return nullptr;
+    return nullptr;
   }
-  auto                                temp = std::move(fixed_tables.front());
+  auto temp = std::move(fixed_tables.front());
   fixed_tables.pop_front();
   fixed_bytes -= temp->get_size();
   return temp;
@@ -305,16 +305,16 @@ std::list<std::unique_ptr<Skiplist>> MemTable::flushsync() {
 }
 bool MemTable::frozen_cur_table(bool force) {
   std::unique_lock<std::shared_mutex> lock(cur_lock_);
-  
+
   // 空表不冻结，无论是否 force
   if (current_table->get_size() == 0) {
     return false;
   }
-  
+
   if (!force && current_table->get_size() < Global_::MAX_MEMTABLE_SIZE_PER_TABLE) {
     return false;
   }
-  
+
   auto new_table = std::make_unique<Skiplist>();
   fixed_bytes += current_table->get_size();
   current_table->set_status(Global_::SkiplistStatus::kFrozen);

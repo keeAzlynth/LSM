@@ -63,11 +63,8 @@ size_t BloomFilter::hash(const std::string& key, size_t idx) const {
   return (h1 + idx * h2) % num_bits_;
 }
 size_t BloomFilter::encode_size() const {
-  return sizeof(expected_elements_)
-       + sizeof(false_positive_rate_)
-       + sizeof(num_bits_)
-       + sizeof(num_hashes_)
-       + (num_bits_ + 7) / 8;
+  return sizeof(expected_elements_) + sizeof(false_positive_rate_) + sizeof(num_bits_) +
+         sizeof(num_hashes_) + (num_bits_ + 7) / 8;
 }
 
 void BloomFilter::encode_bits_fast(uint8_t* ptr, size_t num_bytes) const {
@@ -76,21 +73,17 @@ void BloomFilter::encode_bits_fast(uint8_t* ptr, size_t num_bytes) const {
 
   for (size_t i = 0; i < full_bytes; ++i) {
     const size_t b = i * 8;
-    *ptr++ = (bits_[b]     ? 0x01 : 0)
-           | (bits_[b + 1] ? 0x02 : 0)
-           | (bits_[b + 2] ? 0x04 : 0)
-           | (bits_[b + 3] ? 0x08 : 0)
-           | (bits_[b + 4] ? 0x10 : 0)
-           | (bits_[b + 5] ? 0x20 : 0)
-           | (bits_[b + 6] ? 0x40 : 0)
-           | (bits_[b + 7] ? 0x80 : 0);
+    *ptr++         = (bits_[b] ? 0x01 : 0) | (bits_[b + 1] ? 0x02 : 0) | (bits_[b + 2] ? 0x04 : 0) |
+             (bits_[b + 3] ? 0x08 : 0) | (bits_[b + 4] ? 0x10 : 0) | (bits_[b + 5] ? 0x20 : 0) |
+             (bits_[b + 6] ? 0x40 : 0) | (bits_[b + 7] ? 0x80 : 0);
   }
 
   if (rem_bits > 0) {
     uint8_t      byte = 0;
     const size_t b    = full_bytes * 8;
     for (size_t j = 0; j < rem_bits; ++j) {
-      if (bits_[b + j]) byte |= (1u << j);
+      if (bits_[b + j])
+        byte |= (1u << j);
     }
     *ptr = byte;
   }
@@ -103,14 +96,14 @@ void BloomFilter::decode_bits_fast(const uint8_t* ptr, size_t num_bytes) {
   for (size_t i = 0; i < full_bytes; ++i) {
     const uint8_t byte = *ptr++;
     const size_t  b    = i * 8;
-    bits_[b]     = (byte & 0x01) != 0;
-    bits_[b + 1] = (byte & 0x02) != 0;
-    bits_[b + 2] = (byte & 0x04) != 0;
-    bits_[b + 3] = (byte & 0x08) != 0;
-    bits_[b + 4] = (byte & 0x10) != 0;
-    bits_[b + 5] = (byte & 0x20) != 0;
-    bits_[b + 6] = (byte & 0x40) != 0;
-    bits_[b + 7] = (byte & 0x80) != 0;
+    bits_[b]           = (byte & 0x01) != 0;
+    bits_[b + 1]       = (byte & 0x02) != 0;
+    bits_[b + 2]       = (byte & 0x04) != 0;
+    bits_[b + 3]       = (byte & 0x08) != 0;
+    bits_[b + 4]       = (byte & 0x10) != 0;
+    bits_[b + 5]       = (byte & 0x20) != 0;
+    bits_[b + 6]       = (byte & 0x40) != 0;
+    bits_[b + 7]       = (byte & 0x80) != 0;
   }
 
   if (rem_bits > 0) {
@@ -125,10 +118,14 @@ void BloomFilter::decode_bits_fast(const uint8_t* ptr, size_t num_bytes) {
 size_t BloomFilter::encode_into(uint8_t* dst) const {
   uint8_t* ptr = dst;
 
-  std::memcpy(ptr, &expected_elements_,   sizeof(expected_elements_));   ptr += sizeof(expected_elements_);
-  std::memcpy(ptr, &false_positive_rate_, sizeof(false_positive_rate_)); ptr += sizeof(false_positive_rate_);
-  std::memcpy(ptr, &num_bits_,            sizeof(num_bits_));            ptr += sizeof(num_bits_);
-  std::memcpy(ptr, &num_hashes_,          sizeof(num_hashes_));          ptr += sizeof(num_hashes_);
+  std::memcpy(ptr, &expected_elements_, sizeof(expected_elements_));
+  ptr += sizeof(expected_elements_);
+  std::memcpy(ptr, &false_positive_rate_, sizeof(false_positive_rate_));
+  ptr += sizeof(false_positive_rate_);
+  std::memcpy(ptr, &num_bits_, sizeof(num_bits_));
+  ptr += sizeof(num_bits_);
+  std::memcpy(ptr, &num_hashes_, sizeof(num_hashes_));
+  ptr += sizeof(num_hashes_);
 
   const size_t num_bytes = (num_bits_ + 7) / 8;
   encode_bits_fast(ptr, num_bytes);
@@ -150,10 +147,14 @@ BloomFilter BloomFilter::decode(const std::vector<uint8_t>& data) {
   const auto* ptr = data.data();
   BloomFilter bf;
 
-  std::memcpy(&bf.expected_elements_,   ptr, sizeof(bf.expected_elements_));   ptr += sizeof(bf.expected_elements_);
-  std::memcpy(&bf.false_positive_rate_, ptr, sizeof(bf.false_positive_rate_)); ptr += sizeof(bf.false_positive_rate_);
-  std::memcpy(&bf.num_bits_,            ptr, sizeof(bf.num_bits_));            ptr += sizeof(bf.num_bits_);
-  std::memcpy(&bf.num_hashes_,          ptr, sizeof(bf.num_hashes_));          ptr += sizeof(bf.num_hashes_);
+  std::memcpy(&bf.expected_elements_, ptr, sizeof(bf.expected_elements_));
+  ptr += sizeof(bf.expected_elements_);
+  std::memcpy(&bf.false_positive_rate_, ptr, sizeof(bf.false_positive_rate_));
+  ptr += sizeof(bf.false_positive_rate_);
+  std::memcpy(&bf.num_bits_, ptr, sizeof(bf.num_bits_));
+  ptr += sizeof(bf.num_bits_);
+  std::memcpy(&bf.num_hashes_, ptr, sizeof(bf.num_hashes_));
+  ptr += sizeof(bf.num_hashes_);
 
   const size_t expected_bytes = (bf.num_bits_ + 7) / 8;
   const size_t header_size    = ptr - data.data();

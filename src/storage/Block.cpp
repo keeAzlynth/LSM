@@ -9,6 +9,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <print>
 
@@ -100,29 +101,47 @@ std::string Block::get_key(const std::size_t offset) const {
   return std::string(reinterpret_cast<const char*>(Data_.data() + offset + sizeof(uint16_t)),
                      key_len);
 }
-
-std::string Block::get_value(const std::size_t offset) const {
+std::optional<std::pair<std::string_view, uint64_t>> Block::get_value(
+    const std::size_t offset) const {
   if (offset > Offset_[Offset_.size() - 1]) {
-    spdlog::info(" Block::get_value(const std::size_t offset) {} Invaild offset to much{}", offset,
+    spdlog::info("Block::get_value(const std::size_t offset) {} Invalid offset too much {}", offset,
                  Offset_[Offset_.size() - 1]);
+    return std::nullopt;
   }
+
+  // 获取底层字节数据指针（unsigned char 类型）
+  const unsigned char* base = Data_.data();
+
+  // 读取 key_len
   uint16_t key_len;
-  std::memcpy(&key_len, Data_.data() + offset, sizeof(uint16_t));
-  uint16_t value_len;
-  std::memcpy(&value_len, Data_.data() + offset + sizeof(uint16_t) + key_len, sizeof(uint16_t));
-  return std::string(reinterpret_cast<const char*>(Data_.data() + offset + sizeof(uint16_t) +
-                                                   key_len + sizeof(uint16_t)),
-                     value_len);
+  std::memcpy(&key_len, base + offset, sizeof(uint16_t));
+
+  // value_len 紧跟在 key 数据之后
+  const unsigned char* value_len_ptr = base + offset + sizeof(uint16_t) + key_len;
+  uint16_t             value_len;
+  std::memcpy(&value_len, value_len_ptr, sizeof(uint16_t));
+
+  // value 数据的起始位置
+  const unsigned char* value_start = value_len_ptr + sizeof(uint16_t);
+
+  // tr 紧跟在 value 数据之后
+  const unsigned char* tr_ptr = value_start + value_len;
+  uint64_t             tr;
+  std::memcpy(&tr, tr_ptr, sizeof(uint64_t));
+
+  // 构造 string_view，需要转换为 const char*
+  std::string_view value_view(reinterpret_cast<const char*>(value_start), value_len);
+  return std::make_pair(value_view, tr);
 }
 std::shared_ptr<Block::Entry> Block::get_entry(std::size_t offset) {
   if (offset > Offset_[Offset_.size() - 1]) {
     spdlog::info("Block::get_entry(std::size_t offset) {} Invaild offset to much{}", offset,
                  Offset_[Offset_.size() - 1]);
   }
-  auto key      = get_key(offset);
-  auto value    = get_value(offset);
-  auto tranc_id = get_tranc_id(offset);
-  return std::make_shared<Block::Entry>(Block::Entry{key, value, tranc_id.value()});
+  auto key            = get_key(offset);
+  auto value_tranc_id = get_value(offset);
+  return std::make_shared<Block::Entry>(
+      Block::Entry{key, std::string(value_tranc_id->first), value_tranc_id->second});
 }
 
 std::optional<uint64_t> Block::get_tranc_id(const std::size_t offset) const {
@@ -148,7 +167,7 @@ std::string Block::get_first_key() {
 }
 
 std::optional<std::pair<size_t, size_t>> Block::get_offset_binary(std::string_view key,
-                                                                  const uint64_t     tranc_id) {
+                                                                  const uint64_t   tranc_id) {
   if (Offset_.empty()) {
     return std::nullopt;
   }
@@ -288,7 +307,7 @@ size_t Block::get_cur_size() const {
   return Data_.size() + Offset_.size() * sizeof(uint16_t) + sizeof(uint16_t);
 }
 
-std::optional<std::string> Block::get_value_binary(std::string_view key) {
+std::optional<std::pair<std::string_view, uint64_t>> Block::get_value_binary(std::string_view key) {
   auto idx = get_offset_binary(key);
   if (idx.has_value()) {
     return get_value(idx->first);

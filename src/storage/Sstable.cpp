@@ -9,6 +9,7 @@
 #include <optional>
 #include <print>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -168,13 +169,14 @@ std::vector<std::shared_ptr<Block>> Sstable::find_block_range(std::string_view k
   if ((key_prefix < first_key && !first_key.starts_with(key_prefix)) || key_prefix > last_key) {
     return result;
   }
-  
+
   auto res1 = find_block_idx(key_prefix, true);
-  if (!res1.has_value()) return result;
-  
+  if (!res1.has_value())
+    return result;
+
   result.push_back(read_block(res1.value()));
   std::string key_prefix_end = std::string(key_prefix) + '\xFF';
-  for (int index = res1.value() + 1; index < (int)block_metas.size(); index++) {
+  for (int index = res1.value() + 1; index < (int) block_metas.size(); index++) {
     // block的first_key还在前缀范围内，继续收集
     if (block_metas[index].first_key_.starts_with(key_prefix) ||
         block_metas[index].first_key_ < key_prefix_end) {
@@ -183,7 +185,7 @@ std::vector<std::shared_ptr<Block>> Sstable::find_block_range(std::string_view k
       break;  // ← break放在这里，超出范围才停止
     }
   }
-  
+
   return result;
 }
 size_t Sstable::num_blocks() const {
@@ -209,20 +211,25 @@ std::string Sstable::get_last_key() const {
 bool Sstable::is_block_index_vaild(size_t block_idx) const {
   return block_idx < block_metas.size() ? true : false;
 }
-bool Sstable::KeyExists(std::string_view key) {
+std::optional<std::pair<std::string_view, uint64_t>> Sstable::KeyExists(std::string_view key,
+                                                                        uint64_t         tranc_id) {
   if (key < first_key || key > last_key) {
-    return false;
+    return std::nullopt;
   }
   // 先在布隆过滤器判断key是否存在
   if (bloom_filter != nullptr && !bloom_filter->possibly_contains(key)) {
-    return false;
+    return std::nullopt;
   }
   auto block_idx_opt = find_block_idx(key);
   if (!block_idx_opt.has_value()) {
-    return false;
+    return std::nullopt;
   }
   auto block = read_block(block_idx_opt.value());
-  return block->KeyExists(key);
+  auto res   = block->get_value_binary(key);
+  if (res.has_value() && res->second < tranc_id) {
+    return res;
+  }
+  return std::nullopt;
 }
 SstIterator Sstable::get_Iterator(std::string_view key, uint64_t tranc_id, bool is_prefix) {
   if (!is_prefix) {
@@ -409,9 +416,12 @@ std::shared_ptr<Sstable> Sstbuild::build(std::shared_ptr<BlockCache> block_cache
   }
 
   // ── 5. 写 footer ──────────────────────────────────────────────
-  std::memcpy(ptr, &meta_offset,  sizeof(uint32_t)); ptr += sizeof(uint32_t);
-  std::memcpy(ptr, &bloom_offset, sizeof(uint32_t)); ptr += sizeof(uint32_t);
-  std::memcpy(ptr, &min_tranc_id, sizeof(uint64_t)); ptr += sizeof(uint64_t);
+  std::memcpy(ptr, &meta_offset, sizeof(uint32_t));
+  ptr += sizeof(uint32_t);
+  std::memcpy(ptr, &bloom_offset, sizeof(uint32_t));
+  ptr += sizeof(uint32_t);
+  std::memcpy(ptr, &min_tranc_id, sizeof(uint64_t));
+  ptr += sizeof(uint64_t);
   std::memcpy(ptr, &max_tranc_id, sizeof(uint64_t));
 
   // ── 6. 写文件 ────────────────────────────────────────────────

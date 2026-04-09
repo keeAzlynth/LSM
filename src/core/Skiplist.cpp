@@ -66,8 +66,7 @@ std::tuple<std::string, std::string, uint64_t> SkiplistIterator::get_value_tranc
   return {std::string(), std::string(), 0};
 }
 
-bool Skiplist::Insert(std::string key,std::string value,
-                      const uint64_t transaction_id) {
+bool Skiplist::Insert(std::string key, std::string value, const uint64_t transaction_id) {
   std::array<Node*, Global_::FIX_LEVEL> update;
   update.fill(nullptr);
   auto current = head.get();
@@ -85,15 +84,15 @@ bool Skiplist::Insert(std::string key,std::string value,
     for (int i = current_level; i < Newlevel; i++) {
       update[i] = head.get();
     }
-    current_level = Newlevel; // 提前更新 current_level
+    current_level = Newlevel;  // 提前更新 current_level
   }
   size_bytes += (key.size() + value.size() + sizeof(uint64_t) + 8 * (Global_::FIX_LEVEL + 1));
   // 创建新节点
   auto NewNode = std::make_unique<Node>(key, value, transaction_id);
   // 插入新节点
   for (int i = 0; i < Newlevel; i++) {
-      NewNode->forward[i]   = update[i]->forward[i];
-      update[i]->forward[i] = NewNode.get();
+    NewNode->forward[i]   = update[i]->forward[i];
+    update[i]->forward[i] = NewNode.get();
   }
   NewNode->next_   = std::move(update[0]->next_);
   update[0]->next_ = std::move(NewNode);
@@ -138,8 +137,7 @@ bool Skiplist::Delete(std::string_view key) {
   return true;
 }
 
-std::optional<std::string> Skiplist::Contain(std::string_view key,
-                                             const uint64_t     transaction_id) {
+std::optional<std::string> Skiplist::Contain(std::string_view key, const uint64_t transaction_id) {
   auto current = head.get();
   // 从最高层开始查找
   for (int i = current_level - 1; i >= 0; i--) {
@@ -177,7 +175,7 @@ std::optional<LookupResult> Skiplist::Get(std::string_view key, const uint64_t t
   if (current->forward[0] && cmp(current->forward[0]->key_, key) == 0) {
     if (transaction_id == 0) {
       current = current->forward[0];
-      return  LookupResult(current->value_, current->transaction_id);
+      return LookupResult(current->value_, current->transaction_id);
     } else {
       while (current->forward[0] && cmp(current->forward[0]->key_, key) == 0 &&
              current->forward[0]->transaction_id > transaction_id) {
