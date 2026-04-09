@@ -17,7 +17,7 @@ BlockIterator::BlockIterator(std::shared_ptr<Block> block_, const std::string& k
     auto iter = block->get_prefix_begin_offset_binary(key);
     if (iter.has_value()) {
       auto index = iter->second;
-      while (block_->get_value(index).starts_with(key)) {
+      while (block_->get_value(index)->first.starts_with(key)) {
         if (block_->get_tranc_id(block_->get_offset(index).value()).value() <= tranc_id) {
           break;
         }
