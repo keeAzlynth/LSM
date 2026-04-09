@@ -25,8 +25,8 @@ int main() {
   // ──────────────────────────────────────────
   section("1. 基本读写 put / get");
 
-  lsm->put("name",    "Alice");
-  lsm->put("city",    "Tokyo");
+  lsm->put("name", "Alice");
+  lsm->put("city", "Tokyo");
   lsm->put("version", "1.0.0");
 
   for (const auto& key : {"name", "city", "version", "missing"}) {
@@ -44,12 +44,10 @@ int main() {
   section("2. 覆盖写 & 删除 remove");
 
   lsm->put("version", "2.0.0");
-  std::println("  overwrite version => \"{}\"",
-               lsm->get("version").value_or("(not found)"));
+  std::println("  overwrite version => \"{}\"", lsm->get("version").value_or("(not found)"));
 
   lsm->remove("city");
-  std::println("  after remove city => \"{}\"",
-               lsm->get("city").value_or("(not found)"));
+  std::println("  after remove city => \"{}\"", lsm->get("city").value_or("(not found)"));
 
   // ──────────────────────────────────────────
   // 3. 批量写入 & 批量查询
@@ -58,15 +56,14 @@ int main() {
 
   std::vector<std::pair<std::string, std::string>> kvs;
   for (int i = 0; i < 5; ++i) {
-    kvs.push_back({std::format("user:{:03d}", i),
-                   std::format("name_{}", i)});
+    kvs.push_back({std::format("user:{:03d}", i), std::format("name_{}", i)});
   }
   lsm->put_batch(kvs);
 
   auto batch_results = lsm->get_batch({"user:000", "user:002", "user:004", "user:999"});
   for (const auto& [key, val] : batch_results) {
-    std::println("  get_batch({:12}) => {}",
-                 key, val ? std::format("\"{}\"", *val) : "(not found)");
+    std::println("  get_batch({:12}) => {}", key,
+                 val ? std::format("\"{}\"", *val) : "(not found)");
   }
 
   // ──────────────────────────────────────────
@@ -80,7 +77,7 @@ int main() {
 
   for (const auto& prefix : {"user:", "order:"}) {
     std::println("  prefix \"{}\" matches:", prefix);
-    for (const auto& [key, val,tranc_id] : lsm->get_prefix_range(prefix)) {
+    for (const auto& [key, val, tranc_id] : lsm->get_prefix_range(prefix)) {
       std::println("    {} => \"{}\"", key, val);
     }
   }
@@ -92,8 +89,7 @@ int main() {
 
   lsm->put("persist_key", "I will survive flush");
   lsm->flush();
-  std::println("  after flush => \"{}\"",
-               lsm->get("persist_key").value_or("(not found)"));
+  std::println("  after flush => \"{}\"", lsm->get("persist_key").value_or("(not found)"));
 
   // ──────────────────────────────────────────
   // 6. 大量写入，触发自动压缩
