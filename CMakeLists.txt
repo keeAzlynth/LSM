@@ -49,8 +49,13 @@ else()
 endif()
 
 # Collect all source files from src/ subdirectories
-file(GLOB_RECURSE LSM_SOURCES "src/*.cpp")
-
+file(GLOB_RECURSE LSM_SOURCES 
+    "src/core/*.cpp"
+    "src/iterator/*.cpp"
+    "src/storage/*.cpp"
+	"src/compaction/*.cpp"
+    "LSM.cpp"
+)
 # Create a library from the LSM sources
 add_library(lsm_lib STATIC ${LSM_SOURCES})
 target_include_directories(lsm_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

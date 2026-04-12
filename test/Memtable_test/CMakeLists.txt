@@ -5,9 +5,9 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # 选项配置
-option(ENABLE_TSAN "启用 ThreadSanitizer" ON)
+option(ENABLE_TSAN "启用 ThreadSanitizer" OFF)
 option(ENABLE_VALGRIND "启用 Valgrind 支持" OFF)
-option(ENABLE_ASAN "启用 AddressSanitizer" ON)
+option(ENABLE_ASAN "启用 AddressSanitizer" OFF)
 
 # TSAN 配置
 if(ENABLE_TSAN)

@@ -1,12 +1,14 @@
 #include "../../include/core/memtable.h"
 #include <gtest/gtest.h>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
+#include <format>
+#include <memory>
 #include <print>
 #include <string>
+#include <thread>
 #include <vector>
-#include <format>
-#include <chrono>
-#include <memory>
 
 class MemtableTest : public ::testing::Test {
  protected:
@@ -161,11 +163,11 @@ TEST_F(MemtableTest, FrozenAndFlush) {
   EXPECT_GT(initial_size, 0);
 
   // 冻结表
-  memtable->frozen_cur_table();
+  memtable->frozen_cur_table(true);
 
   // 验证冻结结果
-  EXPECT_EQ(memtable->get_cur_size(), 40);
-  EXPECT_GT(memtable->get_fixed_size(), 0);
+  EXPECT_EQ(memtable->get_cur_size(), 0);
+  EXPECT_EQ(memtable->get_fixed_size(), initial_size);
   EXPECT_GE(memtable->get_fixed_size(), total_size);
 }
 
@@ -268,6 +270,182 @@ TEST_F(MemtableTest, PerformanceAndMemoryUsageTest) {
   std::print("当前表内存大小: {} bytes\n", cur_size);
   std::print("固定表内存大小: {} bytes\n", fixed_size);
   std::print("总内存大小: {} bytes\n", total_size);
+}
+
+// Benchmark WITH sharding
+TEST_F(MemtableTest, ConcurrentPutGet_Benchmark_WithSharding) {
+  auto memtable_shard = std::make_unique<MemTable>();
+
+  const int NUM_THREADS     = 10;
+  const int KEYS_PER_THREAD = 50000;
+  const int TOTAL_OPS       = NUM_THREADS * KEYS_PER_THREAD;
+
+  std::vector<std::pair<std::string, std::string>> test_data(TOTAL_OPS);
+  for (int t = 0; t < NUM_THREADS; ++t) {
+    for (int i = 0; i < KEYS_PER_THREAD; ++i) {
+      int idx        = t * KEYS_PER_THREAD + i;
+      test_data[idx] = {std::format("shard_t{:02d}_k{:05d}", t, i),
+                        std::format("val_t{:02d}_i{:05d}", t, i)};
+    }
+  }
+
+  std::atomic<int>         write_success{0};
+  std::vector<std::thread> writers;
+
+  auto write_start = std::chrono::steady_clock::now();
+  for (int t = 0; t < NUM_THREADS; ++t) {
+    writers.emplace_back([&, t]() {
+      for (int i = 0; i < KEYS_PER_THREAD; ++i) {
+        int idx = t * KEYS_PER_THREAD + i;
+        memtable_shard->put_mutex(test_data[idx].first, test_data[idx].second);
+        write_success.fetch_add(1, std::memory_order_relaxed);
+      }
+    });
+  }
+
+  for (auto& w : writers) {
+    w.join();
+  }
+  writers.clear();
+
+  auto   write_end = std::chrono::steady_clock::now();
+  double write_sec = std::chrono::duration<double>(write_end - write_start).count();
+  double write_qps = TOTAL_OPS / write_sec;
+
+  // Print actual shard node counts
+  std::print("\n=== ACTUAL SHARD NODE COUNTS AFTER WRITE ===\n");
+  auto   shard_counts = memtable_shard->getShardNodeCounts();
+  size_t total_nodes  = 0;
+  for (size_t i = 0; i < shard_counts.size(); ++i) {
+    std::print("Shard[{}]: {} nodes\n", i, shard_counts[i]);
+    total_nodes += shard_counts[i];
+  }
+  std::print("Total nodes: {}\n", total_nodes);
+
+  std::vector<std::thread> readers;
+  std::atomic<int>         found_count{0};
+  auto                     read_start = std::chrono::steady_clock::now();
+
+  for (int t = 0; t < NUM_THREADS; ++t) {
+    readers.emplace_back([&, t]() {
+      for (int i = 0; i < KEYS_PER_THREAD; ++i) {
+        int idx               = t * KEYS_PER_THREAD + i;
+        auto& [key, expected] = test_data[idx];
+        auto val              = memtable_shard->get(key);
+        if (val.has_value() && val.value().first == expected) {
+          found_count.fetch_add(1, std::memory_order_relaxed);
+        }
+      }
+    });
+  }
+
+  for (auto& r : readers) {
+    r.join();
+  }
+  readers.clear();
+
+  auto   read_end = std::chrono::steady_clock::now();
+  double read_sec = std::chrono::duration<double>(read_end - read_start).count();
+  double read_qps = TOTAL_OPS / read_sec;
+
+  std::print("\n=== WITH SHARDING (open_shard=true) ===\n");
+  std::print("Write: {} ops in {:.3f}s => {:.0f} QPS\n", TOTAL_OPS, write_sec, write_qps);
+  std::print("Read:  {} ops in {:.3f}s => {:.0f} QPS\n", TOTAL_OPS, read_sec, read_qps);
+
+  EXPECT_EQ(write_success.load(), TOTAL_OPS);
+  EXPECT_EQ(found_count.load(), TOTAL_OPS);
+
+  // Explicit cleanup before test exit
+  memtable_shard.reset();
+  test_data.clear();
+}
+
+// Benchmark WITHOUT sharding
+TEST_F(MemtableTest, ConcurrentPutGet_Benchmark_Sharding) {
+  auto memtable_shard = std::make_unique<MemTable>(true);
+
+  const int NUM_THREADS     = 10;
+  const int KEYS_PER_THREAD = 50000;
+  const int TOTAL_OPS       = NUM_THREADS * KEYS_PER_THREAD;
+
+  std::vector<std::pair<std::string, std::string>> test_data(TOTAL_OPS);
+  for (int t = 0; t < NUM_THREADS; ++t) {
+    for (int i = 0; i < KEYS_PER_THREAD; ++i) {
+      int idx        = t * KEYS_PER_THREAD + i;
+      test_data[idx] = {std::format("noshard_t{:02d}_k{:05d}", t, i),
+                        std::format("val_t{:02d}_i{:05d}", t, i)};
+    }
+  }
+
+  std::atomic<int>         write_success{0};
+  std::vector<std::thread> writers;
+
+  auto write_start = std::chrono::steady_clock::now();
+  for (int t = 0; t < NUM_THREADS; ++t) {
+    writers.emplace_back([&, t]() {
+      for (int i = 0; i < KEYS_PER_THREAD; ++i) {
+        int idx = t * KEYS_PER_THREAD + i;
+        memtable_shard->put_mutex(test_data[idx].first, test_data[idx].second);
+        write_success.fetch_add(1, std::memory_order_relaxed);
+      }
+    });
+  }
+
+  for (auto& w : writers) {
+    w.join();
+  }
+  writers.clear();
+
+  auto   write_end = std::chrono::steady_clock::now();
+  double write_sec = std::chrono::duration<double>(write_end - write_start).count();
+  double write_qps = TOTAL_OPS / write_sec;
+
+  // Print actual shard node counts
+  std::print("\n=== ACTUAL SHARD NODE COUNTS AFTER WRITE ===\n");
+  auto   shard_counts = memtable_shard->getShardNodeCounts();
+  size_t total_nodes  = 0;
+  for (size_t i = 0; i < shard_counts.size(); ++i) {
+    std::print("Shard[{}]: {} nodes\n", i, shard_counts[i]);
+    total_nodes += shard_counts[i];
+  }
+  std::print("Total nodes: {}\n", total_nodes);
+
+  std::vector<std::thread> readers;
+  std::atomic<int>         found_count{0};
+  auto                     read_start = std::chrono::steady_clock::now();
+
+  for (int t = 0; t < NUM_THREADS; ++t) {
+    readers.emplace_back([&, t]() {
+      for (int i = 0; i < KEYS_PER_THREAD; ++i) {
+        int idx               = t * KEYS_PER_THREAD + i;
+        auto& [key, expected] = test_data[idx];
+        auto val              = memtable_shard->get(key);
+        if (val.has_value() && val.value().first == expected) {
+          found_count.fetch_add(1, std::memory_order_relaxed);
+        }
+      }
+    });
+  }
+
+  for (auto& r : readers) {
+    r.join();
+  }
+  readers.clear();
+
+  auto   read_end = std::chrono::steady_clock::now();
+  double read_sec = std::chrono::duration<double>(read_end - read_start).count();
+  double read_qps = TOTAL_OPS / read_sec;
+
+  std::print("\n===SHARDING (open_shard=false) ===\n");
+  std::print("Write: {} ops in {:.3f}s => {:.0f} QPS\n", TOTAL_OPS, write_sec, write_qps);
+  std::print("Read:  {} ops in {:.3f}s => {:.0f} QPS\n", TOTAL_OPS, read_sec, read_qps);
+
+  EXPECT_EQ(write_success.load(), TOTAL_OPS);
+  EXPECT_EQ(found_count.load(), TOTAL_OPS);
+
+  // Explicit cleanup before test exit
+  memtable_shard.reset();
+  test_data.clear();
 }
 
 int main(int argc, char** argv) {
