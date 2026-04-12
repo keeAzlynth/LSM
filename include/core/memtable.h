@@ -1,5 +1,7 @@
 #pragma once
+#include "Global.h"
 #include "Skiplist.h"
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <list>
@@ -54,14 +56,15 @@ class MemTable {
   friend class LSM_Engine;
 
  public:
-  MemTable();
+  MemTable(bool open_shard = false, size_t shard_num = 1);
   MemTable(const MemTable& other)            = delete;
   MemTable& operator=(const MemTable& other) = delete;
   ~MemTable()                                = default;
   std::vector<std::tuple<std::string, std::string, uint64_t>> get_prefix_range(
       std::string_view prefix, uint64_t tranc_id);
   void clear();
-  void put(const std::string& key, const std::string& value, const uint64_t transaction_id = 0);
+  void put(const std::string& key, const std::string& value, const uint64_t transaction_id = 0,
+           const size_t shard_idx = 0);
   void put_mutex(const std::string& key, const std::string& value,
                  const uint64_t transaction_id = 0);
   void put_batch(const std::vector<std::pair<std::string, std::string>>& key_value_pairs,
@@ -77,8 +80,8 @@ class MemTable {
   size_t get_cur_size();
   size_t get_fixed_size();
   size_t get_total_size();
-  void   remove(std::string_view key, const uint64_t transaction_id = 0);
-  void   remove_mutex(std::string_view key, const uint64_t transaction_id = 0);
+  void   remove(std::string key, const uint64_t transaction_id = 0);
+  void   remove_mutex(std::string key, const uint64_t transaction_id = 0);
   void   remove_batch(const std::vector<std::string>& key_pairs, const uint64_t transaction_id = 0);
   bool   IsFull();
   std::unique_ptr<Skiplist>            flushtodisk();
@@ -89,11 +92,15 @@ class MemTable {
   MemTableIterator                     end();
   MemTableIterator prefix_serach(std::string_view key, const uint64_t transaction_id = 0);
 
+  // Debug: Get actual node counts for each shard
+  std::vector<size_t> getShardNodeCounts() const;
+
  private:
-  std::unique_ptr<Skiplist>            current_table;  // 活跃 SkipList
-  std::list<std::unique_ptr<Skiplist>> fixed_tables;   // 不可写的 SkipList==InmutTable
-  std::atomic_size_t                   fixed_bytes;    // fixed_tables的跳表的大小
+  bool                                                        open_shard_;
+  std::array<std::unique_ptr<Skiplist>, Global_::NUMS_SHARDS> current_table;  // 活跃 SkipList
+  std::list<std::unique_ptr<Skiplist>> fixed_tables;  // 不可写的 SkipList==InmutTable
+  std::atomic_size_t                   fixed_bytes;   // fixed_tables的跳表的大小
   std::shared_mutex                    fix_lock_;
-  std::shared_mutex                    cur_lock_;   // 保护当前跳表的锁
-  std::atomic<Global_::SkiplistStatus> cur_status;  // 当前跳表的状态
+  std::array<std::shared_mutex, Global_::NUMS_SHARDS> cur_lock_;   // 保护当前跳表的锁
+  std::atomic<Global_::SkiplistStatus>                cur_status;  // 当前跳表的状态
 };

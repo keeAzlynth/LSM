@@ -17,8 +17,8 @@
 
 class SkiplistIterator;
 struct LookupResult {
-  std::string_view value;
-  uint64_t         transaction_id;
+  std::string value;
+  uint64_t    transaction_id;
 };
 class Node {
  public:
@@ -97,6 +97,28 @@ class Skiplist {
     size_bytes.exchange(other.size_bytes, std::memory_order_relaxed);
     nodecount.exchange(other.nodecount, std::memory_order_relaxed);
     return *this;
+  }
+
+  ~Skiplist() {
+    // Iterative cleanup to avoid stack overflow from recursive unique_ptr destruction
+    if (head) {
+      clearLinkedList();
+      head.reset();
+    }
+  }
+
+  // Explicitly clear the linked list to prevent stack overflow
+  void clearLinkedList() {
+    if (!head)
+      return;
+
+    // Move the entire chain out of head to prevent recursive destruction
+    std::unique_ptr<Node> current = std::move(head->next_);
+    while (current) {
+      // Move next before current's destructor runs
+      std::unique_ptr<Node> next = std::move(current->next_);
+      current                    = std::move(next);
+    }
   }
 
   bool Insert(std::string key, std::string value, const uint64_t transaction_id = 0);

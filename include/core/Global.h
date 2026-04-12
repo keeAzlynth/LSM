@@ -2,9 +2,10 @@
 #include <random>
 #include <string_view>
 namespace Global_ {
-constexpr int              FIX_LEVEL                         = 4;
-constexpr int              MAX_LEVEL                         = 12;
-constexpr int              MAX_MEMTABLE_SIZE_PER_TABLE       = 1024 * 1024 * 1;  // 1MB
+constexpr int              FIX_LEVEL   = 4;
+constexpr int              MAX_LEVEL   = 12;
+constexpr int              NUMS_SHARDS = 8;  // 分片数量，默认表示不开启分片
+constexpr int              MAX_MEMTABLE_SIZE_PER_TABLE       = 1024 * 1024 * 3;  // 4MB
 constexpr int              MAX_SSTABLE_SIZE                  = 1024 * 1024 * 2;  // 2MB
 constexpr int              Block_SIZE                        = 1024 * 4;         // 4KB
 constexpr int              Block_CACHE_capacity              = 1024 * 64;
