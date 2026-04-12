@@ -57,12 +57,11 @@ class Manifest {
   Manifest& operator=(Manifest&&)      = delete;
 
   // Write ADD_SST record + fsync.  Thread-safe.
-  void add_sst(const SstMeta& meta);
-  // Write REMOVE_SST record + fsync.  Thread-safe.
-  void remove_sst(size_t sst_id);
+  void add_sst(const SstMeta& meta);    // 只 append，不 fsync
+void remove_sst(size_t sst_id);       // 只 append，不 fsync
   // Truncate MANIFEST and clear the in-memory live-set.  Thread-safe.
   void clear();
-
+  void sync(); 
   // Snapshot of all currently live SST metadata.
   [[nodiscard]] std::vector<SstMeta> get_live_ssts() const;
   // max(max_tranc_id) over all live SSTs; 0 when no SSTs exist.

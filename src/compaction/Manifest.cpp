@@ -93,7 +93,10 @@ void Manifest::clear() {
   // Overwrite with an empty file; subsequent writes start from the beginning.
   file_ = FileObj::create_and_write(path_, {});
 }
-
+void Manifest::sync() {
+  std::lock_guard lk(mu_);
+  file_.sync();
+}
 std::vector<SstMeta> Manifest::get_live_ssts() const {
   std::lock_guard      lk(mu_);
   std::vector<SstMeta> out;
@@ -130,7 +133,6 @@ void Manifest::write_record(uint8_t type, std::vector<uint8_t> payload) {
   write_le<uint32_t>(record, crc);
 
   file_.append(record);
-  file_.sync();  // ensure durability before returning
 }
 
 // ─── replay ──────────────────────────────────────────────────────────────────

@@ -370,7 +370,6 @@ uint64_t LSM_Engine::put(const std::string& key, const std::string& value, uint6
   // existing void-return contract of LSM::put).
   if (auto r = wal->log(WalEntry{key, value, tranc_id}); !r)
     spdlog::error("WAL log failed for key='{}': error {}", key, static_cast<int>(r.error()));
-
   memtable->put_mutex(key, value, tranc_id);
   if (memtable->get_total_size() >= Global_::MAX_MEMTABLE_SIZE_PER_TABLE)
     compaction_cv_.notify_one();
@@ -427,7 +426,9 @@ uint64_t LSM_Engine::remove_batch(const std::vector<std::string>& keys, uint64_t
 // ════════════════════════════════════════════════════════════════════════════
 
 uint64_t LSM_Engine::flush(bool force) {
-  if (memtable->get_total_size() == 0) return 0;
+  if (memtable->get_total_size() == 0){
+     return 0;
+    }
 
   const size_t new_sst_id = next_sst_id.fetch_add(1);
   Sstbuild     builder(Global_::Block_SIZE, true);
@@ -458,7 +459,7 @@ uint64_t LSM_Engine::flush(bool force) {
       .first_key    = new_sst->get_first_key(),
       .last_key     = new_sst->get_last_key(),
   });
-
+manifest_->sync();  // ensure durability of MANIFEST update before proceeding
   // ── WAL checkpoint: inform WAL that entries up to this point are safe ─────
   //  The WAL cleaner will eventually delete segments whose every tranc_id
   //  is <= checkpoint.
@@ -594,7 +595,7 @@ void LSM_Engine::full_compact(size_t src_level) {
         .last_key     = sst->get_last_key(),
     });
   }
-
+manifest_->sync();  // ensure durability of MANIFEST update before proceeding
   // ── Step 2: delete old SSTs + write REMOVE_SST for each ──────────────────
   for (auto old_id : old_level_id_x) {
     level_size[src_level] -= ssts[old_id]->get_sst_size();
@@ -608,7 +609,7 @@ void LSM_Engine::full_compact(size_t src_level) {
     ssts.erase(old_id);
     manifest_->remove_sst(old_id);
   }
-
+manifest_->sync();  // ensure durability of MANIFEST update before proceeding
   level_sst_ids[src_level].clear();
   level_sst_ids[target_level].clear();
   cur_max_level = std::max(cur_max_level, target_level);

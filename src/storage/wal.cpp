@@ -162,8 +162,10 @@ std::expected<void, WalError> WAL::log_unordered(const WalEntry& entry) {
     return r;
   if (log_file_.size() > file_size_limit_)
     reset_file();
-  if (!log_file_.sync())
-    return std::unexpected(WalError::kSyncFailed);
+ if constexpr (Global_::WAL_SYNC_ON_WRITE) {
+    if (!log_file_.sync())
+      return std::unexpected(WalError::kSyncFailed);
+  }
   return {};
 }
 
@@ -217,9 +219,11 @@ std::expected<void, WalError> WAL::write_group(std::span<Writer*> group) {
     reset_file();
     return {};
   }
-
-  if (!log_file_.sync())
-    return std::unexpected(WalError::kSyncFailed);
+  // ── 与 log_unordered 保持一致 ────────────────────────────────────────────
+  if constexpr (Global_::WAL_SYNC_ON_WRITE) {
+    if (!log_file_.sync())
+      return std::unexpected(WalError::kSyncFailed);
+  }
   return {};
 }
 

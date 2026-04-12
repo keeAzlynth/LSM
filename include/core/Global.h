@@ -14,6 +14,7 @@ constexpr int              LSM_SST_LEVEL_RATIO               = 4;
 constexpr int              bloom_filter_expected_size_       = 65536;
 constexpr double           bloom_filter_expected_error_rate_ = 0.1;
 constexpr std::string_view WAL_DIR                           = "data/wal";
+constexpr bool WAL_SYNC_ON_WRITE = false;  // 改为 false 开启 group-only sync
 constexpr int              WAL_BLOCK_SIZE       = 1024 * 32;         // 32 KB  (already present)
 constexpr uint64_t         WAL_FILE_LIMIT       = 1024 * 1024 * 64;  // 64 MB per WAL file
 constexpr uint64_t         WAL_CLEAN_INTERVAL_S = 30;                // cleaner cadence (seconds)
@@ -26,8 +27,9 @@ enum class SkiplistStatus {
   KFreezing,
   kFrozen,
 };
-
-constexpr WalWritePolicy WAL_WRITE_POLICY = WalWritePolicy::kPipelined;
+// Global.h — 找到这行改掉
+constexpr WalWritePolicy WAL_WRITE_POLICY = WalWritePolicy::kUnordered; // ← 原来是 kPipelined
+//constexpr WalWritePolicy WAL_WRITE_POLICY = WalWritePolicy::kPipelined;
 // ── Write policy ─────────────────────────────────────────────────────────────
 //   kPipelined : group leader writes WAL for the whole batch, then releases
 //                the write lock so the next group can start WAL while the
