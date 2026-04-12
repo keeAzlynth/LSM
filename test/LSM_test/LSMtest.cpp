@@ -253,13 +253,13 @@ TEST_F(LSMTest, CompactionWithDeletes_DeletesPreserved) {
   for (int i = 0; i < N; ++i) {
     lsm->put(std::format("del_key_{:05d}", i), std::format("value_{:05d}", i));
   }
-  lsm->flush();
+  lsm->flush(true);
 
   // 第二阶段：删除一部分数据
   for (int i = 0; i < N; i += 2) {
     lsm->remove(std::format("del_key_{:05d}", i));
   }
-  lsm->flush();
+  lsm->flush(true);
 
   // 第三阶段：再写入新数据，触发压缩
   for (int i = 0; i < N / 2; ++i) {
@@ -284,7 +284,6 @@ TEST_F(LSMTest, CompactionWithDeletes_DeletesPreserved) {
   for (int i = 0; i < N / 2; i += 100) {
     auto val = lsm->get(std::format("new_key_{:05d}", i));
     ASSERT_TRUE(val.has_value());
-    std::print("{}", val.value());
     EXPECT_EQ(val->starts_with("new_val"), true);
   }
 }

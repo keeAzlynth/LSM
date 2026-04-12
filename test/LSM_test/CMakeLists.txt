@@ -78,10 +78,7 @@ set(SOURCE_FILES
 	../../src/utils/Loger.cpp
 	../../src/core/record.cpp
 	../../src/storage/wal.cpp
-	../../src/iterator/contactIterator.cpp
-	../../src/iterator/TmergeIterator.cpp
-	../../src/iterator/Levelterator.cpp
-	../../src/transaction/transaction.cpp
+	../../src/compaction/Manifest.cpp
 )
 
 add_executable(lsm_test

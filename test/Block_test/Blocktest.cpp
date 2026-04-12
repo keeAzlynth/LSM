@@ -26,7 +26,7 @@ TEST_F(BlockTest, BasicOperations) {
   // 测试获取值
   auto value1 = block->get_value_binary("key1");
   EXPECT_TRUE(value1.has_value());
-  EXPECT_EQ(value1.value(), "value1");
+  EXPECT_EQ(value1.value().first, "value1");
 }
 
 // 测试二分查找
@@ -47,8 +47,8 @@ TEST_F(BlockTest, EncodeAndDecode) {
   auto encoded = block->encode();
   auto decoded = block->decode(encoded);
 
-  EXPECT_EQ(decoded->get_value_binary("key1").value(), "value1");
-  EXPECT_EQ(decoded->get_value_binary("key2").value(), "value2");
+  EXPECT_EQ(decoded->get_value_binary("key1").value().first, "value1");
+  EXPECT_EQ(decoded->get_value_binary("key2").value().first, "value2");
 }
 
 // 测试获取首尾键
