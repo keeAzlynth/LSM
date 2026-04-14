@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <format>
 #include <memory>
@@ -12,7 +13,7 @@
 
 class MemtableTest : public ::testing::Test {
  protected:
-  void SetUp() override { memtable = std::move(std::make_unique<MemTable>()); }
+  void SetUp() override { memtable = std::move(std::make_unique<MemTable>(false)); }
 
   std::unique_ptr<MemTable> memtable;
 
@@ -273,8 +274,8 @@ TEST_F(MemtableTest, PerformanceAndMemoryUsageTest) {
 }
 
 // Benchmark WITH sharding
-TEST_F(MemtableTest, ConcurrentPutGet_Benchmark_WithSharding) {
-  auto memtable_shard = std::make_unique<MemTable>();
+TEST_F(MemtableTest, ConcurrentPutGet_Benchmark_With_NO_Sharding) {
+  auto memtable_shard = std::make_unique<MemTable>(false);
 
   const int NUM_THREADS     = 10;
   const int KEYS_PER_THREAD = 50000;
@@ -348,7 +349,7 @@ TEST_F(MemtableTest, ConcurrentPutGet_Benchmark_WithSharding) {
   double read_sec = std::chrono::duration<double>(read_end - read_start).count();
   double read_qps = TOTAL_OPS / read_sec;
 
-  std::print("\n=== WITH SHARDING (open_shard=true) ===\n");
+  std::print("\n=== WITH SHARDING (open_shard=false) ===\n");
   std::print("Write: {} ops in {:.3f}s => {:.0f} QPS\n", TOTAL_OPS, write_sec, write_qps);
   std::print("Read:  {} ops in {:.3f}s => {:.0f} QPS\n", TOTAL_OPS, read_sec, read_qps);
 
@@ -360,12 +361,12 @@ TEST_F(MemtableTest, ConcurrentPutGet_Benchmark_WithSharding) {
   test_data.clear();
 }
 
-// Benchmark WITHOUT sharding
+// Benchmark WITH sharding
 TEST_F(MemtableTest, ConcurrentPutGet_Benchmark_Sharding) {
   auto memtable_shard = std::make_unique<MemTable>(true);
 
   const int NUM_THREADS     = 10;
-  const int KEYS_PER_THREAD = 50000;
+  const int KEYS_PER_THREAD = 100000;
   const int TOTAL_OPS       = NUM_THREADS * KEYS_PER_THREAD;
 
   std::vector<std::pair<std::string, std::string>> test_data(TOTAL_OPS);
@@ -436,7 +437,7 @@ TEST_F(MemtableTest, ConcurrentPutGet_Benchmark_Sharding) {
   double read_sec = std::chrono::duration<double>(read_end - read_start).count();
   double read_qps = TOTAL_OPS / read_sec;
 
-  std::print("\n===SHARDING (open_shard=false) ===\n");
+  std::print("\n===SHARDING (open_shard=true) ===\n");
   std::print("Write: {} ops in {:.3f}s => {:.0f} QPS\n", TOTAL_OPS, write_sec, write_qps);
   std::print("Read:  {} ops in {:.3f}s => {:.0f} QPS\n", TOTAL_OPS, read_sec, read_qps);
 

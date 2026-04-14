@@ -56,7 +56,7 @@ class MemTable {
   friend class LSM_Engine;
 
  public:
-  MemTable(bool open_shard = false, size_t shard_num = 1);
+  MemTable(bool open_shard = true, size_t shard_num = 1);
   MemTable(const MemTable& other)            = delete;
   MemTable& operator=(const MemTable& other) = delete;
   ~MemTable()                                = default;
@@ -83,11 +83,11 @@ class MemTable {
   void   remove(std::string key, const uint64_t transaction_id = 0);
   void   remove_mutex(std::string key, const uint64_t transaction_id = 0);
   void   remove_batch(const std::vector<std::string>& key_pairs, const uint64_t transaction_id = 0);
-  bool   IsFull();
+  bool   IsFull(size_t target=0);
   std::unique_ptr<Skiplist>            flushtodisk();
   std::unique_ptr<Skiplist>            flush();
   std::list<std::unique_ptr<Skiplist>> flushsync();
-  bool                                 frozen_cur_table(bool force = false);
+  bool                                 frozen_cur_table(bool force = false,size_t target=0);
   MemTableIterator                     begin();
   MemTableIterator                     end();
   MemTableIterator prefix_serach(std::string_view key, const uint64_t transaction_id = 0);
