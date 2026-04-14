@@ -46,7 +46,7 @@ struct SstMeta {
 //    and replaying the MANIFEST correctly reflects whichever records
 //    survived.  Duplicate SSTs after a crash are safely handled by the
 //    engine's compaction logic on the next startup.
-// ─────────────────────────────────────────────────────────────────────────────
+
 class Manifest {
  public:
   explicit Manifest(std::string_view dir);

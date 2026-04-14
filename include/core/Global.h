@@ -4,8 +4,8 @@
 namespace Global_ {
 constexpr int              FIX_LEVEL   = 4;
 constexpr int              MAX_LEVEL   = 12;
-constexpr int              NUMS_SHARDS = 8;  // 分片数量，默认表示不开启分片
-constexpr int              MAX_MEMTABLE_SIZE_PER_TABLE       = 1024 * 1024 * 3;  // 4MB
+constexpr int              NUMS_SHARDS = 4;  // 分片数量，默认表示不开启分片
+constexpr int              MAX_MEMTABLE_SIZE_PER_TABLE       = 1024 * 1024 * 2;  // 2MB
 constexpr int              MAX_SSTABLE_SIZE                  = 1024 * 1024 * 2;  // 2MB
 constexpr int              Block_SIZE                        = 1024 * 4;         // 4KB
 constexpr int              Block_CACHE_capacity              = 1024 * 64;
@@ -28,7 +28,7 @@ enum class SkiplistStatus {
   kFrozen,
 };
 // Global.h — 找到这行改掉
-constexpr WalWritePolicy WAL_WRITE_POLICY = WalWritePolicy::kUnordered; // ← 原来是 kPipelined
+constexpr WalWritePolicy WAL_WRITE_POLICY = WalWritePolicy::kUnordered; // ← 原来是这个
 //constexpr WalWritePolicy WAL_WRITE_POLICY = WalWritePolicy::kPipelined;
 // ── Write policy ─────────────────────────────────────────────────────────────
 //   kPipelined : group leader writes WAL for the whole batch, then releases

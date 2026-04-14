@@ -180,7 +180,10 @@ SstIterator::valuetype SstIterator::operator*() const {
 }
 
 uint64_t SstIterator::get_tranc_id() const {
-  return max_tranc_id_;
+  if (!m_block_it) {
+    return 0;
+  }
+  return m_block_it->get_cur_tranc_id();
 }
 std::optional<size_t> SstIterator::get_Block_Meta_size() const {
   if (m_sst) {

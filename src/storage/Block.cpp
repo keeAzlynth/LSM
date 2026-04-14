@@ -169,21 +169,45 @@ std::optional<std::pair<size_t, size_t>> Block::get_offset_binary(std::string_vi
   if (Offset_.empty()) {
     return std::nullopt;
   }
-  // 二分查找
-  int left  = 0;
-  int right = Offset_.size() - 1;
+  // 二分查找任意一个命中的 key。
+  int left = 0;
+  int right = static_cast<int>(Offset_.size()) - 1;
+  int found = -1;
   while (left <= right) {
     int         mid     = left + (right - left) / 2;
     std::string mid_key = get_key(Offset_[mid]);
     if (mid_key == key) {
-      return std::make_pair<size_t, size_t>(Offset_[mid], mid);
+      found = mid;
+      break;
     } else if (mid_key < key) {
       left = mid + 1;
     } else {
       right = mid - 1;
     }
   }
-  // 如果没有找到完全匹配的键，返回 std::nullopt
+  if (found == -1) {
+    return std::nullopt;
+  }
+
+  // 同 key 的版本是连续存放的，并且按新到旧的顺序写入。
+  int first = found;
+  while (first > 0 && get_key(Offset_[first - 1]) == key) {
+    --first;
+  }
+
+  if (tranc_id == 0) {
+    return std::make_pair<size_t, size_t>(Offset_[first], first);
+  }
+
+  for (size_t idx = static_cast<size_t>(first); idx < Offset_.size(); ++idx) {
+    if (get_key(Offset_[idx]) != key) {
+      break;
+    }
+    auto cur_tranc_id = get_tranc_id(Offset_[idx]);
+    if (cur_tranc_id.has_value() && cur_tranc_id.value() <= tranc_id) {
+      return std::make_pair(Offset_[idx], idx);
+    }
+  }
   return std::nullopt;
 }
 
@@ -305,8 +329,9 @@ size_t Block::get_cur_size() const {
   return Data_.size() + Offset_.size() * sizeof(uint16_t) + sizeof(uint16_t);
 }
 
-std::optional<std::pair<std::string, uint64_t>> Block::get_value_binary(std::string_view key) {
-  auto idx = get_offset_binary(key);
+std::optional<std::pair<std::string, uint64_t>> Block::get_value_binary(std::string_view key,
+                                                                        const uint64_t   tranc_id) {
+  auto idx = get_offset_binary(key, tranc_id);
   if (idx.has_value()) {
     return get_value(idx->first);
   }

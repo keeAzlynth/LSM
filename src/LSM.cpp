@@ -249,7 +249,10 @@ std::optional<std::pair<std::string, uint64_t>> LSM_Engine::get(std::string_view
       size_t mid = left + (right - left) / 2;
       auto&  sst = ssts[l_sst_ids[mid]];
       auto   res = sst->KeyExists(key, tranc_id);
-      if (res.has_value()) return res;
+      if (res.has_value()) {
+        if (res->first.empty()) return std::nullopt;
+        return res;
+      }
       else if (sst->get_last_key() < key) left = mid + 1;
       else right = mid;
     }
@@ -560,6 +563,72 @@ std::pair<size_t, size_t> LSM_Engine::find_the_small_kv(std::vector<SstIterator>
   return std::make_pair(res - sst_iters.begin(), index);
 }
 
+bool LSM_Engine::can_drop_tombstone(std::string_view key, size_t output_level) const {
+  if (output_level >= cur_max_level) {
+    return true;
+  }
+
+  for (size_t level = output_level + 1; level <= cur_max_level; ++level) {
+    auto level_it = level_sst_ids.find(level);
+    if (level_it == level_sst_ids.end()) {
+      continue;
+    }
+    for (auto sst_id : level_it->second) {
+      auto sst_it = ssts.find(sst_id);
+      if (sst_it == ssts.end() || !sst_it->second) {
+        continue;
+      }
+      const auto& sst = sst_it->second;
+      if (sst->get_first_key() <= key && key <= sst->get_last_key()) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+namespace {
+
+struct CompactionEntry {
+  std::string value;
+  uint64_t    tranc_id;
+};
+
+std::optional<std::string> find_smallest_compaction_key(const std::vector<SstIterator>& merged) {
+  std::optional<std::string> min_key;
+  for (const auto& it : merged) {
+    if (!it.valid()) {
+      continue;
+    }
+    if (!min_key.has_value() || it.key() < min_key.value()) {
+      min_key = it.key();
+    }
+  }
+  return min_key;
+}
+
+std::vector<CompactionEntry> collect_compaction_entries(std::vector<SstIterator>& merged,
+                                                        const std::string&        key) {
+  std::vector<CompactionEntry> entries;
+  for (auto& it : merged) {
+    while (it.valid() && it.key() == key) {
+      entries.push_back(CompactionEntry{
+          .value    = it.value(),
+          .tranc_id = it.get_tranc_id(),
+      });
+      ++it;
+    }
+  }
+
+  std::stable_sort(entries.begin(), entries.end(), [](const CompactionEntry& lhs,
+                                                      const CompactionEntry& rhs) {
+    return lhs.tranc_id > rhs.tranc_id;
+  });
+  return entries;
+}
+
+}  // namespace
+
 // ─── full_compact ──────────────────────────────────────────────────────────
 //
 //  Crash-safety ordering:
@@ -632,55 +701,50 @@ manifest_->sync();  // ensure durability of MANIFEST update before proceeding
 
 std::vector<std::shared_ptr<Sstable>> LSM_Engine::full_l0_l1_compact(
     std::vector<size_t>& l0_ids, std::vector<size_t>& l1_ids) {
+  const size_t output_level = 1;
   std::vector<std::shared_ptr<Sstable>> sst;
   sst.reserve(std::max(l0_ids.size(), l1_ids.size()) + 1);
   auto merged  = merge_sst_iterator(l0_ids, l1_ids);
   auto builder = std::make_unique<Sstbuild>(Global_::Block_CACHE_capacity);
 
-  auto advance_all_with_key = [&](const std::string& key) {
-    for (auto& it : merged)
-      while (it.valid() && it.key() == key) ++it;
-  };
-  auto advance_one = [&](size_t idx, const std::string& key) {
-    while (merged[idx].valid() && merged[idx].key() == key) ++merged[idx];
-  };
-  auto find_best = [&]() -> std::pair<size_t, bool> {
-    std::string min_key;
-    uint64_t    max_tranc = 0;
-    size_t      best_idx  = SIZE_MAX;
-    bool        has_dup   = false;
-    for (size_t i = 0; i < merged.size(); ++i) {
-      if (!merged[i].valid()) continue;
-      const auto& k = merged[i].key();
-      if (best_idx == SIZE_MAX || k < min_key) {
-        min_key = k; max_tranc = merged[i].get_tranc_id();
-        best_idx = i; has_dup = false;
-      } else if (k == min_key) {
-        has_dup = true;
-        if (merged[i].get_tranc_id() > max_tranc) {
-          max_tranc = merged[i].get_tranc_id(); best_idx = i;
-        }
-      }
+  while (true) {
+    auto cur_key_opt = find_smallest_compaction_key(merged);
+    if (!cur_key_opt.has_value()) {
+      break;
     }
-    return {best_idx, has_dup};
-  };
+    const std::string cur_key  = cur_key_opt.value();
+    auto              versions = collect_compaction_entries(merged, cur_key);
 
-  while (exit_valid_sst_iter(merged)) {
-    auto [best_idx, has_dup] = find_best();
-    if (best_idx == SIZE_MAX) break;
-    std::string cur_key = merged[best_idx].key();
-    builder->add(cur_key, merged[best_idx].value(), merged[best_idx].get_tranc_id());
-    if (has_dup) advance_all_with_key(cur_key);
-    else          advance_one(best_idx, cur_key);
+    auto tombstone_it = std::find_if(versions.begin(), versions.end(), [](const CompactionEntry& entry) {
+      return entry.value.empty();
+    });
+
+    bool     keep_tombstone = tombstone_it != versions.end() &&
+                          !can_drop_tombstone(cur_key, output_level);
+    uint64_t tombstone_tid  = tombstone_it != versions.end() ? tombstone_it->tranc_id : 0;
+
+    for (const auto& entry : versions) {
+      if (tombstone_it != versions.end() && entry.tranc_id < tombstone_tid) {
+        continue;
+      }
+      if (tombstone_it != versions.end() && entry.tranc_id == tombstone_tid) {
+        if (entry.value.empty() && keep_tombstone) {
+          builder->add(cur_key, entry.value, entry.tranc_id);
+        }
+        continue;
+      }
+      builder->add(cur_key, entry.value, entry.tranc_id);
+    }
+
     if (builder->estimated_size() >= Global_::MAX_SSTABLE_SIZE) {
       size_t new_id = next_sst_id++;
-      sst.emplace_back(builder->build(block_cache, get_sst_path(new_id, 1), new_id));
+      sst.emplace_back(builder->build(block_cache, get_sst_path(new_id, output_level), new_id));
       builder = std::make_unique<Sstbuild>(Global_::Block_CACHE_capacity);
     }
   }
   if (builder->estimated_size() > 0) {
     size_t new_id = next_sst_id++;
-    sst.emplace_back(builder->build(block_cache, get_sst_path(new_id, 1), new_id));
+    sst.emplace_back(builder->build(block_cache, get_sst_path(new_id, output_level), new_id));
   }
   return sst;
 }
@@ -692,41 +756,35 @@ std::vector<std::shared_ptr<Sstable>> LSM_Engine::full_common_compact(
   auto merged  = merge_sst_iterator(lx_ids, ly_ids);
   auto builder = std::make_unique<Sstbuild>(Global_::Block_CACHE_capacity);
 
-  auto advance_all_with_key = [&](const std::string& key) {
-    for (auto& it : merged)
-      while (it.valid() && it.key() == key) ++it;
-  };
-  auto advance_one = [&](size_t idx, const std::string& key) {
-    while (merged[idx].valid() && merged[idx].key() == key) ++merged[idx];
-  };
-  auto find_best = [&]() -> std::pair<size_t, bool> {
-    std::string min_key;
-    uint64_t    max_tranc = 0;
-    size_t      best_idx  = SIZE_MAX;
-    bool        has_dup   = false;
-    for (size_t i = 0; i < merged.size(); ++i) {
-      if (!merged[i].valid()) continue;
-      const auto& k = merged[i].key();
-      if (best_idx == SIZE_MAX || k < min_key) {
-        min_key = k; max_tranc = merged[i].get_tranc_id();
-        best_idx = i; has_dup = false;
-      } else if (k == min_key) {
-        has_dup = true;
-        if (merged[i].get_tranc_id() > max_tranc) {
-          max_tranc = merged[i].get_tranc_id(); best_idx = i;
-        }
-      }
+  while (true) {
+    auto cur_key_opt = find_smallest_compaction_key(merged);
+    if (!cur_key_opt.has_value()) {
+      break;
     }
-    return {best_idx, has_dup};
-  };
+    const std::string cur_key  = cur_key_opt.value();
+    auto              versions = collect_compaction_entries(merged, cur_key);
 
-  while (exit_valid_sst_iter(merged)) {
-    auto [best_idx, has_dup] = find_best();
-    if (best_idx == SIZE_MAX) break;
-    std::string cur_key = merged[best_idx].key();
-    builder->add(cur_key, merged[best_idx].value(), merged[best_idx].get_tranc_id());
-    if (has_dup) advance_all_with_key(cur_key);
-    else          advance_one(best_idx, cur_key);
+    auto tombstone_it = std::find_if(versions.begin(), versions.end(), [](const CompactionEntry& entry) {
+      return entry.value.empty();
+    });
+
+    bool     keep_tombstone =
+        tombstone_it != versions.end() && !can_drop_tombstone(cur_key, level_y);
+    uint64_t tombstone_tid = tombstone_it != versions.end() ? tombstone_it->tranc_id : 0;
+
+    for (const auto& entry : versions) {
+      if (tombstone_it != versions.end() && entry.tranc_id < tombstone_tid) {
+        continue;
+      }
+      if (tombstone_it != versions.end() && entry.tranc_id == tombstone_tid) {
+        if (entry.value.empty() && keep_tombstone) {
+          builder->add(cur_key, entry.value, entry.tranc_id);
+        }
+        continue;
+      }
+      builder->add(cur_key, entry.value, entry.tranc_id);
+    }
+
     if (builder->estimated_size() >= Global_::MAX_SSTABLE_SIZE) {
       size_t new_id = next_sst_id++;
       sst.emplace_back(builder->build(block_cache, get_sst_path(new_id, level_y), new_id));

@@ -221,11 +221,7 @@ std::optional<std::pair<std::string, uint64_t>> Sstable::KeyExists(std::string_v
     return std::nullopt;
   }
   auto block = read_block(block_idx_opt.value());
-  auto res   = block->get_value_binary(key);
-  if (res.has_value() && res->second <= tranc_id) {
-    return res;
-  }
-  return std::nullopt;
+  return block->get_value_binary(key, tranc_id);
 }
 SstIterator Sstable::get_Iterator(std::string_view key, uint64_t tranc_id, bool is_prefix) {
   if (!is_prefix) {
