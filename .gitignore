@@ -13,3 +13,4 @@ Makefile
 .instructions.md
 .prompt.md
 .agents/
+./lsm/

@@ -399,7 +399,7 @@ uint64_t LSM_Engine::remove(const std::string& key, uint64_t tranc_id) {
     spdlog::error("WAL log failed for remove key='{}': error {}", key,
                   static_cast<int>(r.error()));
 
-  memtable->remove(key, tranc_id);
+  memtable->remove_mutex(key, tranc_id);
   if (memtable->get_total_size() >= Global_::MAX_MEMTABLE_SIZE_PER_TABLE)
     compaction_cv_.notify_one();
   return 0;

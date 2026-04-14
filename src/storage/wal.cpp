@@ -191,11 +191,9 @@ std::expected<void, WalError> WAL::log_pipelined(const WalEntry& entry) {
     // Signal every member *before* releasing write_mutex_ so that no
     // member can observe a partially-written group.
     for (auto* gw : group) {
-      {
         std::lock_guard glk(gw->mu);
         gw->result = res;
         gw->done   = true;
-      }
       gw->cv.notify_one();
     }
     // wlk destroyed here → write_mutex_ released → next leader unblocks.
