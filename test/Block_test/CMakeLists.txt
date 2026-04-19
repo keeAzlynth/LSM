@@ -40,6 +40,12 @@ endif()
 
 # 查找 GTest 包
 find_package(GTest REQUIRED)
+find_package(spdlog REQUIRED)
+
+find_package(fmt QUIET)
+if(NOT fmt_FOUND)
+    target_compile_definitions(spdlog::spdlog INTERFACE SPDLOG_FMT_EXTERNAL=OFF)
+endif()
 
 # 添加源文件
 set(SOURCE_FILES
@@ -57,6 +63,8 @@ add_executable(block_test
 target_link_libraries(block_test
     GTest::gtest
     GTest::gtest_main
+    spdlog::spdlog
+    fmt::fmt
     pthread
 )
 

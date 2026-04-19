@@ -44,6 +44,7 @@ class Sstable : public std::enable_shared_from_this<Sstable> {
   std::pair<uint64_t, uint64_t>                               get_tranc_id_range() const;
   std::vector<std::tuple<std::string, std::string, uint64_t>> get_prefix_range(std::string_view key,
                                                                                uint64_t tranc_id);
+  void print_sstable_debug() ;
 
   std::vector<BlockMeta> block_metas;
   uint64_t               min_tranc_id;
@@ -59,13 +60,13 @@ class Sstable : public std::enable_shared_from_this<Sstable> {
   std::string last_key;
 
   size_t                       sst_id;
-  std::shared_ptr<BloomFilter> bloom_filter;
+  std::unique_ptr<BloomFilter> bloom_filter;
   std::shared_ptr<BlockCache>  block_cache;
 };
 
 class Sstbuild {
  public:
-  Sstbuild(size_t block_size, bool has_bloom = true);
+  Sstbuild(size_t block_size);
   void   clean();
   void   add(const std::string& key, const std::string& value, uint64_t tranc_id = 0);
   void   finish_block();
@@ -74,13 +75,14 @@ class Sstbuild {
                                  const std::string& sstable_path, size_t sstid);
 
  private:
-  std::string                  first_key;
-  std::string                  last_key;
-  uint64_t                     min_tranc_id;
-  uint64_t                     max_tranc_id;
-  std::shared_ptr<BloomFilter> bloom_filter;
-  Block                        block_;
+  std::unique_ptr<BloomFilter> bloom_filter;
+  std::shared_ptr<Block>                        block_;
   std::vector<BlockMeta>       block_metas;
   std::vector<uint8_t>         data;
+  std::string current_block_first_key_;
+    std::string current_block_last_key_;
+    bool is_first_key_set_ = false;
+  uint64_t                     min_tranc_id;
+  uint64_t                     max_tranc_id;
   size_t                       block_size;
 };

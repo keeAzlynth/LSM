@@ -155,55 +155,69 @@ LSM_Engine::~LSM_Engine() {
 //  Read paths  (unchanged from original)
 // ════════════════════════════════════════════════════════════════════════════
 
-std::vector<std::tuple<std::string, std::string, uint64_t>> LSM_Engine::get_prefix_range(
-    const std::string& prefix, uint64_t tranc_id_) {
+std::vector<std::tuple<std::string, std::string, uint64_t>>
+LSM_Engine::get_prefix_range(const std::string& prefix, uint64_t tranc_id_) {
+
   std::unordered_map<std::string, std::pair<std::string, uint64_t>> merged;
 
-  auto memtable_results = memtable->get_prefix_range(prefix, tranc_id_);
-  for (auto& [k, v, tranc_id] : memtable_results)
-    merged[k] = {v, tranc_id};
+  // 1. memtable
+  for (auto& [k, v, tid] : memtable->get_prefix_range(prefix, tranc_id_))
+    merged[k] = {v, tid};
 
-  std::shared_lock<std::shared_mutex> rlock(ssts_mtx);
-
-  for (auto& sst_id : level_sst_ids[0]) {
-    auto& sst     = ssts[sst_id];
-    auto  results = sst->get_prefix_range(prefix, tranc_id_);
-    for (auto& [key, value, tranc_id] : results) {
-      auto it = merged.find(key);
-      if (it == merged.end() || it->second.second < tranc_id)
-        merged[key] = {value, tranc_id};
+  // 计算前缀上界：找到最右侧非 0xFF 字节并 +1，截断其后
+  // 例: "beta_" → "beta`"；"abc\xFF" → "abd"；全 0xFF 则无上界
+  std::string prefix_end = prefix;
+  bool        bounded    = false;
+  for (int i = (int)prefix_end.size() - 1; i >= 0; --i) {
+    if ((unsigned char)prefix_end[i] < 0xFF) {
+      ++prefix_end[i];
+      prefix_end.resize(i + 1);
+      bounded = true;
+      break;
     }
   }
 
+  std::shared_lock<std::shared_mutex> rlock(ssts_mtx);
+
+  // 2. L0：SST 之间 key range 可能重叠，必须扫全部，按 max tranc_id merge
+  for (auto sst_id : level_sst_ids[0]) {
+    auto& sst = ssts[sst_id];
+    if (!sst) continue;
+    if (sst->get_last_key() < prefix) continue;                          // SST 在前缀之前，跳过
+    if (bounded && sst->get_first_key() >= prefix_end) continue;         // SST 在前缀之后，跳过
+    for (auto& [key, value, tid] : sst->get_prefix_range(prefix, tranc_id_)) {
+      auto it = merged.find(key);
+      if (it == merged.end() || it->second.second < tid)
+        merged[key] = {value, tid};
+    }
+  }
+
+  // 3. L1+：同层 SST 有序且不重叠，可以 continue 跳过 + break 提前退出
   for (size_t level = 1; level <= cur_max_level; ++level) {
     const auto& sst_ids = level_sst_ids[level];
     if (sst_ids.empty()) continue;
-
-    std::string prefix_end = prefix;
-    prefix_end.back()++;
-
-    for (auto& sst_id : sst_ids) {
+    for (auto sst_id : sst_ids) {
       auto& sst = ssts[sst_id];
-      if (sst->get_first_key() >= prefix_end) break;
-      auto results = sst->get_prefix_range(prefix, tranc_id_);
-      for (auto& [key, value, tranc_id] : results) {
+      if (!sst) continue;
+      if (sst->get_last_key() < prefix) continue;                        // SST 整体在前缀之前
+      if (bounded && sst->get_first_key() >= prefix_end) break;          // SST 已超过前缀范围
+      for (auto& [key, value, tid] : sst->get_prefix_range(prefix, tranc_id_)) {
         auto it = merged.find(key);
-        if (it == merged.end() || it->second.second < tranc_id)
-          merged[key] = {value, tranc_id};
+        if (it == merged.end() || it->second.second < tid)
+          merged[key] = {value, tid};
       }
     }
   }
 
+  // 4. 过滤墓碑，按 key 排序输出
   std::vector<std::tuple<std::string, std::string, uint64_t>> results;
-  for (auto& [key, val_tranc] : merged) {
-    auto& [value, tranc_id] = val_tranc;
-    if (!value.empty())
-      results.emplace_back(key, value, tranc_id);
+  results.reserve(merged.size());
+  for (auto& [key, vt] : merged) {
+    if (!vt.first.empty())   // 空 value == 墓碑，跳过
+      results.emplace_back(key, vt.first, vt.second);
   }
   std::ranges::sort(results, [](const auto& a, const auto& b) {
-    if (std::get<0>(a) != std::get<0>(b))
-      return std::get<0>(a) < std::get<0>(b);
-    return std::get<2>(a) > std::get<2>(b);
+    return std::get<0>(a) < std::get<0>(b);
   });
   return results;
 }
@@ -259,104 +273,112 @@ std::optional<std::pair<std::string, uint64_t>> LSM_Engine::get(std::string_view
   }
   return std::nullopt;
 }
-
 std::vector<std::tuple<std::string, std::optional<std::string>, uint64_t>>
 LSM_Engine::get_batch(const std::vector<std::string>& keys, uint64_t tranc_id_) {
-  auto memtable_results = memtable->get_batch(keys, tranc_id_);
 
-  std::vector<std::tuple<std::string, std::optional<std::string>, uint64_t>> results;
-  std::vector<std::tuple<std::string, std::optional<std::string>, uint64_t>> un_search;
+  // 每个 key 的查找状态
+  struct State {
+    std::optional<std::string> value;        // nullopt = 墓碑或未找到
+    uint64_t                   write_tid = 0;
+    bool                       found     = false;
+  };
 
-  for (auto& [key, value, tranc_id] : memtable_results) {
-    if (!value.has_value())
-      un_search.emplace_back(key, std::string(), tranc_id_);
-    else if (value.value().empty())
-      results.emplace_back(key, std::nullopt, tranc_id);
-    else
-      results.emplace_back(key, value, tranc_id);
+  std::unordered_map<std::string, State> state;
+  state.reserve(keys.size());
+  for (const auto& k : keys) state.emplace(k, State{});
+
+  for (auto& [k, v, tid] : memtable->get_batch(keys, tranc_id_)) {
+    if (!v.has_value()) continue;       // 不在 memtable，留给 SST 搜索
+    auto& s   = state[k];
+    s.found   = true;
+    s.write_tid = tid;
+    s.value   = v->empty() ? std::nullopt : v;   // 空串 = 墓碑
   }
-  if (un_search.empty()) return results;
+
+  // 收集仍需在 SST 中查找的 key
+  std::vector<std::string> todo;
+  todo.reserve(keys.size());
+  for (const auto& k : keys)
+    if (!state[k].found) todo.push_back(k);
+
+  if (todo.empty()) {
+    std::vector<std::tuple<std::string, std::optional<std::string>, uint64_t>> out;
+    out.reserve(keys.size());
+    for (const auto& k : keys) {
+      auto& s = state[k];
+      out.emplace_back(k, s.value, s.write_tid);
+    }
+    return out;
+  }
 
   std::shared_lock<std::shared_mutex> rlock(ssts_mtx);
 
-  for (auto& sst_id : level_sst_ids[0]) {
+  // 2. L0：SST 按写入时间从新到旧排列，对点查询"找到即止"是正确的
+  //    （同一 key 最新版本一定在最新的 L0 SST 中）
+  for (auto sst_id : level_sst_ids[0]) {
     auto& sst = ssts[sst_id];
-    for (auto& [k, v, tranc_id] : un_search) {
-      if (v.has_value() && v.value().empty()) {
-        auto res = sst->get_Iterator(k, tranc_id);
-        if (res.valid()) {
-          auto val_str   = res->second;
-          auto val_tranc = res.get_tranc_id();
-          v        = val_str.empty() ? std::nullopt : std::optional<std::string>(val_str);
-          tranc_id = val_tranc;
-        }
+    if (!sst) continue;
+
+    bool any_left = false;
+    for (const auto& k : todo) {
+      auto& s = state[k];
+      if (s.found) continue;
+      any_left = true;
+      if (auto res = sst->KeyExists(k, tranc_id_); res.has_value()) {
+        s.found    = true;
+        s.write_tid = res->second;
+        s.value    = res->first.empty() ? std::nullopt
+                                        : std::optional<std::string>(res->first);
       }
     }
+    if (!any_left) break;
   }
 
-  std::vector<std::tuple<std::string, std::optional<std::string>, uint64_t>> un_search_L0;
-  for (auto& item : un_search) {
-    auto& v = std::get<1>(item);
-    if (v.has_value() && v.value().empty())
-      un_search_L0.emplace_back(std::get<0>(item), std::string(), tranc_id_);
-    else
-      results.emplace_back(item);
-  }
+  // L0 搜索完后仍未找到的 key
+  std::vector<std::string> remaining;
+  remaining.reserve(todo.size());
+  for (const auto& k : todo)
+    if (!state[k].found) remaining.push_back(k);
 
-  for (size_t level = 1; level <= cur_max_level && !un_search_L0.empty(); ++level) {
+  // 3. L1+：同层有序不重叠，对每个 key 二分找所在 SST
+  for (size_t level = 1; level <= cur_max_level && !remaining.empty(); ++level) {
     const auto& sst_ids = level_sst_ids[level];
     if (sst_ids.empty()) continue;
 
-    std::vector<std::pair<size_t, size_t>> key_to_sst_idx;
-    key_to_sst_idx.reserve(un_search_L0.size());
-
-    for (size_t i = 0; i < un_search_L0.size(); ++i) {
-      const auto& key = std::get<0>(un_search_L0[i]);
-      if (!std::get<1>(un_search_L0[i]).has_value() ||
-          !std::get<1>(un_search_L0[i]).value().empty())
-        continue;
-      size_t left = 0, right = sst_ids.size();
-      while (left < right) {
-        size_t mid = left + (right - left) / 2;
-        if (ssts[sst_ids[mid]]->get_first_key() <= key) left = mid + 1;
-        else right = mid;
+    std::vector<std::string> next_remaining;
+    for (const auto& k : remaining) {
+      // 找到最后一个 last_key >= k 的 SST（即 k 可能所在的 SST）
+      size_t lo = 0, hi = sst_ids.size();
+      while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (ssts[sst_ids[mid]]->get_last_key() < k) lo = mid + 1;
+        else hi = mid;
       }
-      if (left == 0) continue;
-      size_t idx = left - 1;
-      if (key <= ssts[sst_ids[idx]]->get_last_key())
-        key_to_sst_idx.emplace_back(i, idx);
-    }
+      if (lo >= sst_ids.size()) { next_remaining.push_back(k); continue; }
+      auto& sst = ssts[sst_ids[lo]];
+      if (sst->get_first_key() > k) { next_remaining.push_back(k); continue; }
 
-    std::sort(key_to_sst_idx.begin(), key_to_sst_idx.end(),
-              [](const auto& a, const auto& b) { return a.second < b.second; });
-
-    for (size_t g = 0; g < key_to_sst_idx.size();) {
-      size_t sst_idx = key_to_sst_idx[g].second;
-      size_t sst_id  = sst_ids[sst_idx];
-      auto&  sst     = ssts[sst_id];
-      std::vector<size_t> batch_keys_idx;
-      while (g < key_to_sst_idx.size() && key_to_sst_idx[g].second == sst_idx) {
-        batch_keys_idx.push_back(key_to_sst_idx[g].first);
-        ++g;
-      }
-      for (size_t ki : batch_keys_idx) {
-        auto& [key, val, tranc] = un_search_L0[ki];
-        if (val.has_value() && val.value().empty()) {
-          auto iter = sst->get_Iterator(key, tranc);
-          if (iter.valid()) {
-            auto val_str = iter->second;
-            tranc        = iter.get_tranc_id();
-            val          = val_str.empty() ? std::nullopt : std::optional<std::string>(val_str);
-          }
-        }
+      if (auto res = sst->KeyExists(k, tranc_id_); res.has_value()) {
+        auto& s    = state[k];
+        s.found    = true;
+        s.write_tid = res->second;
+        s.value    = res->first.empty() ? std::nullopt
+                                        : std::optional<std::string>(res->first);
+      } else {
+        next_remaining.push_back(k);
       }
     }
+    remaining = std::move(next_remaining);
   }
 
-  for (auto& [key, val, tranc] : un_search_L0)
-    results.emplace_back(key, (val.has_value() && val.value().empty()) ? std::nullopt : val, tranc);
-
-  return results;
+  // 4. 按输入顺序组装结果
+  std::vector<std::tuple<std::string, std::optional<std::string>, uint64_t>> out;
+  out.reserve(keys.size());
+  for (const auto& k : keys) {
+    auto& s = state[k];
+    out.emplace_back(k, s.value, s.write_tid);
+  }
+  return out;
 }
 
 uint64_t LSM_Engine::bytes_to_mb(size_t bytes) const {
@@ -374,7 +396,7 @@ uint64_t LSM_Engine::put(const std::string& key, const std::string& value, uint6
   if (auto r = wal->log(WalEntry{key, value, tranc_id}); !r)
     spdlog::error("WAL log failed for key='{}': error {}", key, static_cast<int>(r.error()));
   memtable->put_mutex(key, value, tranc_id);
-  if (memtable->get_total_size() >= Global_::MAX_MEMTABLE_SIZE_PER_TABLE)
+  if (!memtable->fixed_tables.empty())
     compaction_cv_.notify_one();
   return 0;
 }
@@ -391,7 +413,7 @@ uint64_t LSM_Engine::put_batch(const std::vector<std::pair<std::string, std::str
     spdlog::error("WAL log_batch failed: error {}", static_cast<int>(r.error()));
 
   memtable->put_batch(kvs, tranc_id);
-  if (memtable->get_total_size() >= Global_::MAX_MEMTABLE_SIZE_PER_TABLE)
+  if (!memtable->fixed_tables.empty())
     compaction_cv_.notify_one();
   return 0;
 }
@@ -403,7 +425,7 @@ uint64_t LSM_Engine::remove(const std::string& key, uint64_t tranc_id) {
                   static_cast<int>(r.error()));
 
   memtable->remove_mutex(key, tranc_id);
-  if (memtable->get_total_size() >= Global_::MAX_MEMTABLE_SIZE_PER_TABLE)
+  if (!memtable->fixed_tables.empty())
     compaction_cv_.notify_one();
   return 0;
 }
@@ -412,14 +434,14 @@ uint64_t LSM_Engine::remove_batch(const std::vector<std::string>& keys, uint64_t
   std::vector<WalEntry> entries;
   entries.reserve(keys.size());
   for (const auto& key : keys)
-    entries.push_back({key, /*tombstone*/"", tranc_id});
+    entries.push_back({key, /*tombstone*/std::string(), tranc_id});
 
   if (auto r = wal->log_batch(std::span{entries}); !r)
     spdlog::error("WAL log_batch failed for remove_batch: error {}",
                   static_cast<int>(r.error()));
 
   memtable->remove_batch(keys, tranc_id);
-  if (memtable->get_total_size() >= Global_::MAX_MEMTABLE_SIZE_PER_TABLE)
+  if (!memtable->fixed_tables.empty())
     compaction_cv_.notify_one();
   return 0;
 }
@@ -429,19 +451,16 @@ uint64_t LSM_Engine::remove_batch(const std::vector<std::string>& keys, uint64_t
 // ════════════════════════════════════════════════════════════════════════════
 
 uint64_t LSM_Engine::flush(bool force) {
-  if (memtable->get_total_size() == 0){
+  std::unique_lock<std::shared_mutex> lock(ssts_mtx);
+   if (memtable->get_total_size() == 0){
      return 0;
     }
-
-  const size_t new_sst_id = next_sst_id.fetch_add(1);
-  Sstbuild     builder(Global_::Block_SIZE, true);
-  const auto   sst_path = get_sst_path(new_sst_id, 0);
-
-  std::unique_lock<std::shared_mutex> lock(ssts_mtx);
   memtable->frozen_cur_table(force);
   auto res = memtable->flushtodisk();
   if (!res) return 0;
-
+  Sstbuild     builder(Global_::Block_SIZE);
+  const size_t new_sst_id = next_sst_id.fetch_add(1);
+ const auto   sst_path = get_sst_path(new_sst_id, 0);
   for (auto i = res->begin(); i != res->end(); ++i) {
     auto kv      = i.getValue();
     auto tid     = i.get_tranc_id();
@@ -449,7 +468,11 @@ uint64_t LSM_Engine::flush(bool force) {
   }
 
   auto new_sst = builder.build(block_cache, sst_path, new_sst_id);
-
+  if (!new_sst) {
+    // 没有生成 SST 文件，清理临时路径或直接返回
+    spdlog::info("Skipped empty SST generation for sst_id {}", new_sst_id);
+    return 0;  // 或者返回空 vector
+}
   // ── MANIFEST: persist ADD_SST before updating in-memory index ────────────
   //  If we crash after this write but before the index update the SST exists
   //  on disk and the MANIFEST records it — safe to replay on next startup.
@@ -533,14 +556,13 @@ void LSM_Engine::compaction_worker() {
       std::unique_lock lk(compaction_mutex_);
       compaction_cv_.wait_for(lk, std::chrono::milliseconds(200), [this] {
         return stop_compaction_.load(std::memory_order_relaxed) ||
-               memtable->get_total_size() >= Global_::MAX_MEMTABLE_SIZE_PER_TABLE;
+               !memtable->fixed_tables.empty();
       });
     }
     if (stop_compaction_.load(std::memory_order_relaxed)) break;
-    if (memtable->get_total_size() >= Global_::MAX_MEMTABLE_SIZE_PER_TABLE)
+    if (!memtable->fixed_tables.empty())
       flush();
   }
-  if (memtable->get_total_size() > 0) flush();
 }
 
 bool LSM_Engine::exit_valid_sst_iter(std::vector<SstIterator>& sst_iters) {
@@ -564,38 +586,24 @@ std::pair<size_t, size_t> LSM_Engine::find_the_small_kv(std::vector<SstIterator>
 }
 
 bool LSM_Engine::can_drop_tombstone(std::string_view key, size_t output_level) const {
-  if (output_level >= cur_max_level) {
-    return true;
-  }
-
+  // 墓碑只有在比 output_level 更深的层都没有这个 key 的旧数据时才能丢弃
   for (size_t level = output_level + 1; level <= cur_max_level; ++level) {
-    auto level_it = level_sst_ids.find(level);
-    if (level_it == level_sst_ids.end()) {
-      continue;
-    }
-    for (auto sst_id : level_it->second) {
+    auto it = level_sst_ids.find(level);
+    if (it == level_sst_ids.end()) continue;
+    for (auto sst_id : it->second) {
       auto sst_it = ssts.find(sst_id);
-      if (sst_it == ssts.end() || !sst_it->second) {
-        continue;
-      }
+      if (sst_it == ssts.end() || !sst_it->second) continue;
       const auto& sst = sst_it->second;
-      if (sst->get_first_key() <= key && key <= sst->get_last_key()) {
-        return false;
-      }
+      if (sst->get_first_key() <= key && key <= sst->get_last_key())
+        return false;  // 深层有可能存在此 key，墓碑不能丢
     }
   }
-  return true;
+  return true;  // 深层确认没有，墓碑可以安全丢弃
 }
 
-namespace {
 
-struct CompactionEntry {
-  std::string value;
-  uint64_t    tranc_id;
-};
-
-std::optional<std::string> find_smallest_compaction_key(const std::vector<SstIterator>& merged) {
-  std::optional<std::string> min_key;
+std::optional<std::string> LSM_Engine::find_smallest_compaction_key(const std::vector<SstIterator>& merged) {
+  std::optional<std::string> min_key{std::nullopt};
   for (const auto& it : merged) {
     if (!it.valid()) {
       continue;
@@ -607,7 +615,7 @@ std::optional<std::string> find_smallest_compaction_key(const std::vector<SstIte
   return min_key;
 }
 
-std::vector<CompactionEntry> collect_compaction_entries(std::vector<SstIterator>& merged,
+std::vector<CompactionEntry> LSM_Engine::collect_compaction_entries(std::vector<SstIterator>& merged,
                                                         const std::string&        key) {
   std::vector<CompactionEntry> entries;
   for (auto& it : merged) {
@@ -620,14 +628,12 @@ std::vector<CompactionEntry> collect_compaction_entries(std::vector<SstIterator>
     }
   }
 
-  std::stable_sort(entries.begin(), entries.end(), [](const CompactionEntry& lhs,
+  std::ranges::sort(entries, [](const CompactionEntry& lhs,
                                                       const CompactionEntry& rhs) {
     return lhs.tranc_id > rhs.tranc_id;
   });
   return entries;
 }
-
-}  // namespace
 
 // ─── full_compact ──────────────────────────────────────────────────────────
 //
@@ -714,37 +720,31 @@ std::vector<std::shared_ptr<Sstable>> LSM_Engine::full_l0_l1_compact(
     }
     const std::string cur_key  = cur_key_opt.value();
     auto              versions = collect_compaction_entries(merged, cur_key);
-
-    auto tombstone_it = std::find_if(versions.begin(), versions.end(), [](const CompactionEntry& entry) {
-      return entry.value.empty();
-    });
-
-    bool     keep_tombstone = tombstone_it != versions.end() &&
-                          !can_drop_tombstone(cur_key, output_level);
-    uint64_t tombstone_tid  = tombstone_it != versions.end() ? tombstone_it->tranc_id : 0;
-
-    for (const auto& entry : versions) {
-      if (tombstone_it != versions.end() && entry.tranc_id < tombstone_tid) {
-        continue;
-      }
-      if (tombstone_it != versions.end() && entry.tranc_id == tombstone_tid) {
-        if (entry.value.empty() && keep_tombstone) {
-          builder->add(cur_key, entry.value, entry.tranc_id);
-        }
-        continue;
-      }
-      builder->add(cur_key, entry.value, entry.tranc_id);
+ auto &it= versions[0];
+ assert(!versions.empty());  // 如果触发，说明 SstIterator 没有正确推进
+    if (it.value.empty()&&can_drop_tombstone(cur_key,output_level)) {
+    continue;
     }
-
+      builder->add(cur_key, it.value,it.tranc_id);
     if (builder->estimated_size() >= Global_::MAX_SSTABLE_SIZE) {
       size_t new_id = next_sst_id++;
-      sst.emplace_back(builder->build(block_cache, get_sst_path(new_id, output_level), new_id));
-      builder = std::make_unique<Sstbuild>(Global_::Block_CACHE_capacity);
+        auto new_sst = builder->build(block_cache, get_sst_path(new_id, output_level), new_id);
+    if (new_sst) {
+        sst.emplace_back(std::move(new_sst));
+    } else {
+        --next_sst_id;
+    }
+      builder->clean();
     }
   }
   if (builder->estimated_size() > 0) {
     size_t new_id = next_sst_id++;
-    sst.emplace_back(builder->build(block_cache, get_sst_path(new_id, output_level), new_id));
+     auto new_sst = builder->build(block_cache, get_sst_path(new_id, output_level), new_id);
+    if (new_sst) {
+        sst.emplace_back(std::move(new_sst));
+    } else {
+        --next_sst_id;
+    }
   }
   return sst;
 }
@@ -755,45 +755,37 @@ std::vector<std::shared_ptr<Sstable>> LSM_Engine::full_common_compact(
   sst.reserve(std::max(lx_ids.size(), ly_ids.size()) + 1);
   auto merged  = merge_sst_iterator(lx_ids, ly_ids);
   auto builder = std::make_unique<Sstbuild>(Global_::Block_CACHE_capacity);
-
-  while (true) {
+ while (true) {
     auto cur_key_opt = find_smallest_compaction_key(merged);
     if (!cur_key_opt.has_value()) {
       break;
     }
     const std::string cur_key  = cur_key_opt.value();
     auto              versions = collect_compaction_entries(merged, cur_key);
-
-    auto tombstone_it = std::find_if(versions.begin(), versions.end(), [](const CompactionEntry& entry) {
-      return entry.value.empty();
-    });
-
-    bool     keep_tombstone =
-        tombstone_it != versions.end() && !can_drop_tombstone(cur_key, level_y);
-    uint64_t tombstone_tid = tombstone_it != versions.end() ? tombstone_it->tranc_id : 0;
-
-    for (const auto& entry : versions) {
-      if (tombstone_it != versions.end() && entry.tranc_id < tombstone_tid) {
-        continue;
-      }
-      if (tombstone_it != versions.end() && entry.tranc_id == tombstone_tid) {
-        if (entry.value.empty() && keep_tombstone) {
-          builder->add(cur_key, entry.value, entry.tranc_id);
-        }
-        continue;
-      }
-      builder->add(cur_key, entry.value, entry.tranc_id);
+ auto &it= versions[0];
+    if (it.value.empty()&&can_drop_tombstone(cur_key,level_y)) {
+    continue;
     }
-
+      builder->add(cur_key, it.value,it.tranc_id);
     if (builder->estimated_size() >= Global_::MAX_SSTABLE_SIZE) {
       size_t new_id = next_sst_id++;
-      sst.emplace_back(builder->build(block_cache, get_sst_path(new_id, level_y), new_id));
-      builder = std::make_unique<Sstbuild>(Global_::Block_CACHE_capacity);
+       auto new_sst = builder->build(block_cache, get_sst_path(new_id, level_y), new_id);
+    if (new_sst) {
+        sst.emplace_back(std::move(new_sst));
+    } else {
+        --next_sst_id;
+    }
+      builder->clean();
     }
   }
   if (builder->estimated_size() > 0) {
     size_t new_id = next_sst_id++;
-    sst.emplace_back(builder->build(block_cache, get_sst_path(new_id, level_y), new_id));
+     auto new_sst = builder->build(block_cache, get_sst_path(new_id, level_y), new_id);
+    if (new_sst) {
+        sst.emplace_back(std::move(new_sst));
+    } else {
+        --next_sst_id;
+    }
   }
   return sst;
 }
@@ -801,14 +793,14 @@ std::vector<std::shared_ptr<Sstable>> LSM_Engine::full_common_compact(
 std::vector<std::shared_ptr<Sstable>> LSM_Engine::gen_sst_from_iter(
     BaseIterator& iter, size_t target_sst_size, size_t target_level) {
   std::vector<std::shared_ptr<Sstable>> new_ssts;
-  auto new_sst_builder = Sstbuild(Global_::Block_SIZE, true);
+  auto new_sst_builder = Sstbuild(Global_::Block_SIZE);
   while (iter.valid() && !iter.isEnd()) {
     new_sst_builder.add((*iter).first, (*iter).second, 0);
     ++iter;
     if (new_sst_builder.estimated_size() >= target_sst_size) {
       size_t sst_id = next_sst_id++;
       new_ssts.push_back(new_sst_builder.build(block_cache, get_sst_path(sst_id, target_level), sst_id));
-      new_sst_builder = Sstbuild(Global_::Block_SIZE, true);
+      new_sst_builder = Sstbuild(Global_::Block_SIZE);
     }
   }
   if (new_sst_builder.estimated_size() > 0) {

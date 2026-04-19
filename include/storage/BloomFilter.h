@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include <string>
+#include "../core/Global.h"
 #include <cstdint>
 
 class BloomFilter {
@@ -8,8 +9,7 @@ class BloomFilter {
   // 构造函数，初始化布隆过滤器
   // expected_elements: 预期插入的元素数量
   // false_positive_rate: 允许的假阳性率
-  BloomFilter();
-  BloomFilter(size_t expected_elements, double false_positive_rate);
+  BloomFilter(size_t expected_elements=Global_::bloom_filter_expected_size_, double false_positive_rate=Global_::bloom_filter_expected_error_rate_);
 
   BloomFilter(size_t expected_elements, double false_positive_rate, size_t num_bits);
 

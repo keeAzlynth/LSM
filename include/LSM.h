@@ -21,6 +21,11 @@
 #include <vector>
 #include <print>
 
+struct CompactionEntry {
+  std::string value;
+  uint64_t    tranc_id;
+};
+
 class Level_Iterator;
 
 class LSM_Engine : public std::enable_shared_from_this<LSM_Engine> {
@@ -81,7 +86,9 @@ class LSM_Engine : public std::enable_shared_from_this<LSM_Engine> {
   void compaction_worker();
   bool exit_valid_sst_iter(std::vector<SstIterator>& sst_iters);
   std::pair<size_t, size_t> find_the_small_kv(std::vector<SstIterator>& sst_iters);
-  bool can_drop_tombstone(std::string_view key, size_t output_level) const;
+  std::optional<std::string> find_smallest_compaction_key(const std::vector<SstIterator>& merged);
+  std::vector<CompactionEntry> collect_compaction_entries(std::vector<SstIterator>& merged,const std::string&key);
+  bool can_drop_tombstone(std::string_view key, size_t output_level) const ;
   void full_compact(size_t src_level);
   std::vector<std::shared_ptr<Sstable>> full_l0_l1_compact(std::vector<size_t>& l0_ids,
                                                            std::vector<size_t>& l1_ids);

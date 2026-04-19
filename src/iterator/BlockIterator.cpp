@@ -7,9 +7,8 @@
 #include <utility>
 
 BlockIterator::BlockIterator() : block(nullptr), current_index(0), tranc_id_(0) {}
-BlockIterator::BlockIterator(std::shared_ptr<Block> block_, const std::string& key,
-                             uint64_t tranc_id, bool is_prefix)
-    : block(block_), tranc_id_(tranc_id) {  // 初始化为0
+BlockIterator::BlockIterator(std::shared_ptr<Block> block_, const std::string& key,bool is_prefix)
+    : block(block_), tranc_id_(0) {  // 初始化为0
   if (!block) {
     return;
   }
@@ -17,18 +16,12 @@ BlockIterator::BlockIterator(std::shared_ptr<Block> block_, const std::string& k
     auto iter = block->get_prefix_begin_offset_binary(key);
     if (iter.has_value()) {
       auto index = iter->second;
-      while (block_->get_value(index)->first.starts_with(key)) {
-        if (block_->get_tranc_id(block_->get_offset(index).value()).value() <= tranc_id) {
-          break;
-        }
-        index++;
-      }
       current_index = index;
       update_current();
       return;
     }
   }
-  auto inres = block_->get_offset_binary(key, tranc_id);
+  auto inres = block_->get_offset_binary(key);
   if (inres.has_value()) {
     current_index = inres->second;
     update_current();
@@ -36,12 +29,8 @@ BlockIterator::BlockIterator(std::shared_ptr<Block> block_, const std::string& k
   }
   current_index = block->Offset_.size();
 }
-BlockIterator::BlockIterator(std::shared_ptr<Block> block_, size_t index, uint64_t tranc_id,
-                             bool should_skip)
-    : block(block_), current_index(index), tranc_id_(tranc_id) {
-  if (should_skip) {
-    skip_by_tranc_id();  // 只在需要时跳过
-  }
+BlockIterator::BlockIterator(std::shared_ptr<Block> block_, size_t index)
+    : block(block_), current_index(index), tranc_id_(0) {
   update_current();
 }
 
@@ -111,17 +100,7 @@ void BlockIterator::update_current() {
     tranc_id_    = entry->tranc_id;
     cached_value = std::make_pair(entry->key, entry->value);
   }
-}
-void BlockIterator::skip_by_tranc_id() {
-  if (tranc_id_ == 0 || !block) {
-    return;
-  }
-  while (current_index < block->Offset_.size()) {
-    auto offset = block->Offset_[current_index];
-    auto entry  = block->get_entry(offset);
-    if (entry->tranc_id <= tranc_id_) {  // ← 改成 <=（逻辑检查）
-      break;
-    }
-    ++current_index;
+  else {
+  tranc_id_=0;
   }
 }

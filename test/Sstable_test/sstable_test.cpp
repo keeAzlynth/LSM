@@ -66,25 +66,23 @@ class SstableTest : public ::testing::Test {
     if (std::filesystem::exists(path)) {
       std::filesystem::remove(path);
     }
-    Sstbuild builder(block_size, true);
+    Sstbuild builder(block_size);
 
+      auto local_memtable = std::make_unique<MemTable>(); // 假设默认构造即可
     // 将所有数据放入memtable
     for (const auto& [key, value, ts] : data) {
-      memtable->put(key, value, ts);
+      local_memtable->put(key, value, ts);
     }
 
     // 刷入builder
-    auto flush_result = memtable->flush();
-    if (!flush_result) {
-      spdlog::error("Flush failed");
-    }
 
-    for (auto it = flush_result->begin(); it != flush_result->end(); ++it) {
+    for (auto &flush_result : local_memtable->flush()) {
+     for (auto it = flush_result->begin(); it != flush_result->end(); ++it) {
       auto kv       = it.getValue();
       auto tranc_id = it.get_tranc_id();
       builder.add(kv.first, kv.second, tranc_id);
     }
-
+    }
     return builder.build(block_cache, path, 0);
   }
 
@@ -103,7 +101,7 @@ TEST_F(SstableTest, BuildAndGetPrefixSingleKey_ManyBlocks) {
   if (std::filesystem::exists(tmp_path1))
     std::filesystem::remove(tmp_path1);
 
-  Sstbuild                                         builder(block_size, true);
+  Sstbuild                                         builder(block_size);
   std::vector<std::pair<std::string, std::string>> kvs;
   kvs.reserve(num_records);
   for (size_t i = 0; i < num_records; ++i) {
@@ -115,10 +113,12 @@ TEST_F(SstableTest, BuildAndGetPrefixSingleKey_ManyBlocks) {
     memtable->put(i.first, i.second, 0);
   }
   // 然后在最后调用一次 flushsync，把所有数据刷到 builder
-  auto res = memtable->flush();
+  auto result = memtable->flush();
+  for (auto &res : result) {
   for (auto i = res->begin(); i != res->end(); ++i) {
     auto kv = i.getValue();
     builder.add(kv.first, kv.second);
+  }
   }
 
   std::shared_ptr<Sstable> sst;
@@ -140,7 +140,6 @@ TEST_F(SstableTest, BuildAndGetPrefixSingleKey_ManyBlocks) {
     auto index = Global_::generateRandom(0, num_records - 1);
     checks.push_back({kvs[index].first, kvs[index].second, 0});
   }
-
   for (const auto& pref : checks) {
     auto results = sst->get_prefix_range(std::get<0>(pref), 0);
     ASSERT_FALSE(results.empty()) << "Prefix query returned empty for " << std::get<0>(pref);
@@ -174,7 +173,7 @@ TEST_F(SstableTest, ReadMultipleBlocksAndCache) {
   if (std::filesystem::exists(tmp_path2))
     std::filesystem::remove(tmp_path2);
 
-  Sstbuild builder(block_size, false);  // 关闭 bloom 以简化
+  Sstbuild builder(block_size);  // 关闭 bloom 以简化
   for (size_t i = 0; i < num_records; ++i) {
     builder.add(key_prefix + std::to_string(i), "v" + std::to_string(i), 0);
   }
@@ -238,11 +237,10 @@ static std::vector<std::string> collect_prefix_keys(const std::shared_ptr<BlockI
 
 // 测试MVCC点查询功能
 TEST_F(SstableTest, MvccPointQuery) {
-  auto test_data = generate_range_test_data(1000, 3);  // 生成1000个key确保足够的数据
+  auto test_data = generate_range_test_data(1000, 3);  // 生成100个key确保足够的数据
   auto sst       = build_sstable(test_data, tmp_path1);
 
   ASSERT_NE(sst, nullptr);
-
   // 测试1：key_0050 在不同时间戳的可见版本
   {
     auto results_1050 = sst->get_prefix_range("key_0050", 1050);
@@ -309,55 +307,90 @@ TEST_F(SstableTest, MvccRangeQuery) {
   }
 }
 
-// 测试MVCC范围查询包含结束边界
-TEST_F(SstableTest, MvccRangeQueryInclusive) {
-  auto test_data = generate_range_test_data(1000, 3);
-  auto sst       = build_sstable(test_data, tmp_path2);
+TEST_F(SstableTest, MvccPrefixScan) {
+  std::vector<std::tuple<std::string, std::string, uint64_t>> entries = {
+      {"user:1:name",    "Alice",  100},
+      {"user:1:name",    "Alicia", 200},
+      {"user:1:age",     "25",     100},
+      {"user:1:age",     "26",     150},
+      {"user:2:name",    "Bob",    100},
+      {"user:2:name",    "Robert", 250},
+      {"user:2:age",     "30",     100},
+      {"user:10:city",   "NY",     100},
+      {"user:10:city",   "LA",     300},
+      {"product:1:name", "Laptop", 100},
+      {"product:2:price","999",    100},
+  };
 
+  auto sst = build_sstable(entries, tmp_path2);
   ASSERT_NE(sst, nullptr);
 
-  // 测试包含特定边界键的范围查询
-  auto range_tests =
-      std::to_array<std::tuple<std::string, std::string, uint64_t, std::vector<std::string>>>({
-          {"key_0050",
-           "key_0060",
-           1500,
-           {"key_0050", "key_0051", "key_0052", "key_0053", "key_0054", "key_0055", "key_0056",
-            "key_0057", "key_0058", "key_0059"}},
-          {"key_0998", "key_0999", 2500, {"key_0098", "key_0098", "key_0999", "key_0999"}},
-      });
+  struct TestCase {
+    std::string prefix;
+    uint64_t    timestamp;
+    std::vector<std::pair<std::string, std::string>> expected;
+  };
 
-  for (const auto& [start_key, end_key, timestamp, expected_keys] : range_tests) {
-    std::vector<std::string> found_keys;
+  std::vector<TestCase> tests = {
+      // ts=150：user:1:age 有 100("25") 和 150("26") 两个版本
+      //         user:1:name 只有 100("Alice") 可见（200 > 150）
+      {
+          .prefix    = "user:1:",
+          .timestamp = 150,
+          .expected  = {
+              {"user:1:age",  "25"},
+              {"user:1:age",  "26"},
+              {"user:1:name", "Alice"},
+          }
+      },
+      // ts=200：user:1:name 现在也能看到 200("Alicia")
+      {
+          .prefix    = "user:1:",
+          .timestamp = 200,
+          .expected  = {
+              {"user:1:age",  "25"},
+              {"user:1:age",  "26"},
+              {"user:1:name", "Alice"},
+              {"user:1:name", "Alicia"},
+          }
+      },
+      // ts=300：所有 user: 前缀的可见版本
+      // ts=300
+{
+    .prefix    = "user:",
+    .timestamp = 300,
+    .expected  = {
+        {"user:10:city","LA"},      // '1','0' < '1',':'
+        {"user:10:city","NY"},
+        {"user:1:age",  "25"},
+        {"user:1:age",  "26"},
+        {"user:1:name", "Alice"},
+        {"user:1:name", "Alicia"},
+        {"user:2:age",  "30"},
+        {"user:2:name", "Bob"},
+        {"user:2:name", "Robert"},
+    }
+},
+      // ts=50：所有数据都在 ts=100 之后写入，无可见版本
+      {
+          .prefix    = "user:1:",
+          .timestamp = 50,
+          .expected  = {}
+      },
+  };
 
-    // 遍历范围内的键
-    size_t start_num = 0, end_num = 0;
-    if (start_key.starts_with("key_")) {
-      try {
-        start_num = std::stoi(start_key.substr(4));
-      } catch (...) {
-      }
-    }
-    if (end_key.starts_with("key_")) {
-      try {
-        end_num = std::stoi(end_key.substr(4));
-      } catch (...) {
-      }
-    }
+sst->print_sstable_debug();
+  for (const auto& tc : tests) {
+    auto result = sst->get_prefix_range(tc.prefix, tc.timestamp);
 
-    for (size_t i = start_num; i < end_num; i++) {
-      std::string key     = std::format("key_{:04d}", i);
-      auto        results = sst->get_Iterator(key, timestamp);
-      while (results.isEnd()) {
-        int  count = 0;
-        auto value = results.getValue();
-        if (std::get<0>(value) >= end_key) {
-          EXPECT_EQ(count, expected_keys.size());
-          break;
-        }
-        count++;
-      }
+    std::vector<std::pair<std::string, std::string>> found;
+    for (const auto& [key, value, ts] : result) {
+      found.emplace_back(key, value);
     }
+    std::sort(found.begin(), found.end());
+
+    EXPECT_EQ(found, tc.expected)
+        << "Prefix: " << tc.prefix << ", timestamp: " << tc.timestamp;
   }
 }
 

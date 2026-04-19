@@ -86,6 +86,7 @@ class Skiplist {
         current_level(other.current_level),
         size_bytes(other.size_bytes.load()),
         nodecount(other.nodecount.load()) {
+    num_shard_=0;
     other.head = nullptr;
     size_bytes.exchange(0, std::memory_order_relaxed);
     nodecount.exchange(0, std::memory_order_relaxed);
@@ -124,7 +125,8 @@ class Skiplist {
   bool Insert(std::string key, std::string value, const uint64_t transaction_id = 0);
 
   bool Delete(std::string_view key);
-
+  void set_num_shard(int num_shard);
+  int get_num_shard()const;
   std::optional<std::string>  Contain(std::string_view key, const uint64_t transaction_id = 0);
   std::optional<LookupResult> Get(std::string_view key, const uint64_t transaction_id = 0);
   std::vector<std::pair<std::string, std::string>> flush();
@@ -153,7 +155,7 @@ class Skiplist {
   std::random_device               rd;             // 随机数生成器
   static thread_local std::mt19937 gen;            // 随机数引擎
   std::uniform_real_distribution<> dis;            // 随机数分布
-
+  int                               num_shard_;
   Global_::SkiplistStatus cur_status = Global_::SkiplistStatus::kNormal;
   int                     random_level();
 };

@@ -1,5 +1,5 @@
 #include "../../include/storage/wal.h"
-
+#include "../../include/core/Global.h"
 #include <algorithm>
 #include <array>
 #include <filesystem>
@@ -8,31 +8,7 @@
 namespace {
 
 // Generate lookup table at compile time.
-consteval auto make_crc32c_table() noexcept {
-  std::array<uint32_t, 256> t{};
-  for (uint32_t i = 0; i < 256; ++i) {
-    uint32_t c = i;
-    for (int k = 0; k < 8; ++k) c = (c >> 1) ^ (0x82F63B78u & -(c & 1u));
-    t[i] = c;
-  }
-  return t;
-}
-inline constexpr auto kCrc32cLookup = make_crc32c_table();
 
-[[nodiscard]] constexpr uint32_t crc32c(std::span<const uint8_t> data) noexcept {
-  uint32_t crc = ~0u;
-  for (auto b : data) crc = (crc >> 8) ^ kCrc32cLookup[(crc ^ b) & 0xFF];
-  return ~crc;
-}
-
-// LevelDB-style masking: rotate + salt so a CRC of all-zeros differs from 0.
-[[nodiscard]] constexpr uint32_t mask_crc(uint32_t crc) noexcept {
-  return ((crc >> 15) | (crc << 17)) + 0xa282ead8u;
-}
-[[nodiscard]] constexpr uint32_t unmask_crc(uint32_t v) noexcept {
-  const uint32_t rot = v - 0xa282ead8u;
-  return (rot >> 17) | (rot << 15);
-}
 
 // ─── Block / record constants ─────────────────────────────────────────────────
 inline constexpr size_t kBlockSize  = Global_::WAL_BLOCK_SIZE;  // 32 KB
@@ -43,19 +19,6 @@ inline constexpr uint8_t kRecFull   = 1;  // fits in one block
 inline constexpr uint8_t kRecFirst  = 2;  // first fragment
 inline constexpr uint8_t kRecMiddle = 3;  // interior fragment
 inline constexpr uint8_t kRecLast   = 4;  // last fragment
-
-// ─── Little-endian helpers ────────────────────────────────────────────────────
-template <std::integral T>
-void write_le(std::vector<uint8_t>& buf, T v) noexcept {
-  for (size_t i = 0; i < sizeof(T); ++i) buf.push_back(static_cast<uint8_t>(v >> (i * 8)));
-}
-
-template <std::integral T>
-[[nodiscard]] constexpr T read_le(std::span<const uint8_t> src, size_t off = 0) noexcept {
-  T v{};
-  for (size_t i = 0; i < sizeof(T); ++i) v |= static_cast<T>(src[off + i]) << (i * 8);
-  return v;
-}
 
 }  // namespace
 
@@ -269,13 +232,13 @@ std::expected<void, WalError> WAL::write_physical_record(std::span<const uint8_t
   crc_input.push_back(type);
   crc_input.insert(crc_input.end(), data.begin(), data.end());
 
-  const uint32_t crc = mask_crc(crc32c(std::span{crc_input}));
+  const uint32_t crc = Global_::mask_crc(Global_::crc32c(std::span{crc_input}));
   const uint16_t len = static_cast<uint16_t>(data.size());
 
   std::vector<uint8_t> record;
   record.reserve(kHeaderSize + data.size());
-  write_le(record, crc);
-  write_le(record, len);
+  Global_::write_le(record, crc);
+  Global_::write_le(record, len);
   record.push_back(type);
   record.insert(record.end(), data.begin(), data.end());
 
@@ -294,11 +257,11 @@ std::expected<void, WalError> WAL::write_physical_record(std::span<const uint8_t
 std::vector<uint8_t> WAL::encode_payload(const WalEntry& e) {
   std::vector<uint8_t> buf;
   buf.reserve(4 + e.key.size() + 4 + e.value.size() + 8);
-  write_le<uint32_t>(buf, static_cast<uint32_t>(e.key.size()));
+  Global_::write_le<uint32_t>(buf, static_cast<uint32_t>(e.key.size()));
   buf.insert(buf.end(), e.key.begin(), e.key.end());
-  write_le<uint32_t>(buf, static_cast<uint32_t>(e.value.size()));
+  Global_::write_le<uint32_t>(buf, static_cast<uint32_t>(e.value.size()));
   buf.insert(buf.end(), e.value.begin(), e.value.end());
-  write_le<uint64_t>(buf, e.tranc_id);
+  Global_::write_le<uint64_t>(buf, e.tranc_id);
   return buf;
 }
 
@@ -309,7 +272,7 @@ std::expected<WalEntry, WalError> WAL::decode_payload(std::span<const uint8_t> r
 
   size_t off = 0;
 
-  const auto key_len = read_le<uint32_t>(raw, off);
+  const auto key_len = Global_::read_le<uint32_t>(raw, off);
   off += 4;
   if (off + key_len > raw.size())
     return std::unexpected(WalError::kCorrupted);
@@ -318,7 +281,7 @@ std::expected<WalEntry, WalError> WAL::decode_payload(std::span<const uint8_t> r
 
   if (off + 4 > raw.size())
     return std::unexpected(WalError::kCorrupted);
-  const auto val_len = read_le<uint32_t>(raw, off);
+  const auto val_len = Global_::read_le<uint32_t>(raw, off);
   off += 4;
   if (off + val_len > raw.size())
     return std::unexpected(WalError::kCorrupted);
@@ -327,7 +290,7 @@ std::expected<WalEntry, WalError> WAL::decode_payload(std::span<const uint8_t> r
 
   if (off + 8 > raw.size())
     return std::unexpected(WalError::kCorrupted);
-  const auto tranc_id = read_le<uint64_t>(raw, off);
+  const auto tranc_id = Global_::read_le<uint64_t>(raw, off);
 
   return WalEntry{std::move(key), std::move(value), tranc_id};
 }
@@ -379,7 +342,7 @@ std::expected<std::map<uint64_t, std::vector<WalEntry>>, WalError> WAL::recover(
       if (offset + kHeaderSize > file_size)
         break;  // truncated header → stop
 
-      const uint32_t stored_crc = unmask_crc(file.read_uint32(offset));
+      const uint32_t stored_crc = Global_::mask_crc(file.read_uint32(offset));
       const uint16_t rec_len    = file.read_uint16(offset + 4);
       const uint8_t  rec_type   = file.read_uint8(offset + 6);
 
@@ -395,7 +358,7 @@ std::expected<std::map<uint64_t, std::vector<WalEntry>>, WalError> WAL::recover(
       check.reserve(1 + rec_len);
       check.push_back(rec_type);
       check.insert(check.end(), data.begin(), data.end());
-      if (crc32c(std::span{check}) != stored_crc)
+      if (Global_::crc32c(std::span{check}) != stored_crc)
         return std::unexpected(WalError::kChecksumMismatch);
 
       offset += kHeaderSize + rec_len;
@@ -491,13 +454,13 @@ std::vector<uint64_t> WAL::scan_tranc_ids(FileObj& file) noexcept {
       }
 
       if (complete && scratch.size() >= 16) {
-        const auto   key_len = read_le<uint32_t>(std::span{scratch}, 0);
+        const auto   key_len = Global_::read_le<uint32_t>(std::span{scratch}, 0);
         const size_t val_off = 4 + key_len + 4;
         if (val_off <= scratch.size()) {
-          const auto   val_len = read_le<uint32_t>(std::span{scratch}, 4 + key_len);
+          const auto   val_len = Global_::read_le<uint32_t>(std::span{scratch}, 4 + key_len);
           const size_t tid_off = val_off + val_len;
           if (tid_off + 8 <= scratch.size())
-            ids.push_back(read_le<uint64_t>(std::span{scratch}, tid_off));
+            ids.push_back(Global_::read_le<uint64_t>(std::span{scratch}, tid_off));
         }
         scratch.clear();
       }

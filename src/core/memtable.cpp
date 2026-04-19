@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -138,10 +139,11 @@ bool MemTableIterator::top_value_legal() const {
   }
 }
 
-MemTable::MemTable(bool open_shard, size_t shard_num)
-    : open_shard_(open_shard), fixed_bytes(0), cur_status(Global_::SkiplistStatus::kNormal) {
-  for (auto& it : current_table) {
-    it = std::move(std::make_unique<Skiplist>());
+MemTable::MemTable()
+    :fixed_bytes(0), cur_status(Global_::SkiplistStatus::kNormal) {
+  for (auto it=0;it<current_table.size();it++) {
+    current_table[it] = std::move(std::make_unique<Skiplist>());
+    current_table[it]->set_num_shard(it);
   }
 }
 
@@ -150,17 +152,24 @@ bool MemTableIterator::valid() const {
 }
 std::vector<std::tuple<std::string, std::string, uint64_t>> MemTable::get_prefix_range(
     std::string_view prefix, uint64_t tranc_id) {
-  std::shared_lock<std::shared_mutex> lock(cur_lock_[0]);
-  return current_table[0]->get_prefix_range(prefix, tranc_id);
+std::vector<std::tuple<std::string, std::string, uint64_t>> res;
+ for (auto index=0; index<current_table.size();index++) {
+  std::shared_lock<std::shared_mutex> lock(cur_lock_[index]);
+  auto res1= current_table[index]->get_prefix_range(prefix, tranc_id);
+  if (!res1.empty()) {
+  std::ranges::move(res1,std::back_inserter(res));
+  }
+ }
+       std::shared_lock<std::shared_mutex> lock_fix(fix_lock_);
+  for (auto &it:fixed_tables) {
+  auto res2=it->get_prefix_range(prefix, tranc_id);
+  if (!res2.empty()) {
+  std::ranges::move(res2,std::back_inserter(res));
+  }
+  }
+  return res;
 }
 void MemTable::clear() {
-  if (!open_shard_) {
-    auto temp        = std::move(current_table);
-    current_table[0] = std::move(std::make_unique<Skiplist>());
-    fixed_tables.clear();
-    fixed_bytes = 0;
-    return;
-  }
   // Sharding mode: clear all shards
   for (auto& table : current_table) {
     table = std::move(std::make_unique<Skiplist>());
@@ -170,29 +179,11 @@ void MemTable::clear() {
 }
 void MemTable::put(const std::string& key, const std::string& value, const uint64_t transaction_id,
                    const size_t shard_idx) {
-  if (!open_shard_) {
-    current_table[0]->Insert(key, value, transaction_id);
-  } else {
     current_table[shard_idx]->Insert(key, value, transaction_id);
-  }
 }
 
 void MemTable::put_mutex(const std::string& key, const std::string& value,
                          const uint64_t transaction_id) {
-  if (!open_shard_) {
-    bool need_freeze = false;
-    {
-      std::unique_lock<std::shared_mutex> lock(cur_lock_[0]);
-      current_table[0]->Insert(key, value, transaction_id);
-      if (current_table[0]->get_size() >= Global_::MAX_MEMTABLE_SIZE_PER_TABLE) {
-        need_freeze = true;
-      }
-    }
-    if (need_freeze) {
-      frozen_cur_table();  // 内部自己拿 cur_lock_，多线程同时进来也安全
-    }
-    return;
-  }
   auto index = std::hash<std::string_view>{}(key) % Global_::NUMS_SHARDS;
    bool need_freeze = false;
     {
@@ -205,60 +196,35 @@ void MemTable::put_mutex(const std::string& key, const std::string& value,
     if (need_freeze) {
       frozen_cur_table(false,index);  
     }
-    return;
   return;
 }
 void MemTable::put_batch(const std::vector<std::pair<std::string, std::string>>& key_value_pairs,
                          const uint64_t                                          transaction_id) {
-  if (!open_shard_) {
-    for (const auto& pair : key_value_pairs) {
-      current_table[0]->Insert(pair.first, pair.second, transaction_id);
-    }
-    if (current_table[0]->get_size() > Global_::MAX_MEMTABLE_SIZE_PER_TABLE) {
-      std::unique_lock<std::shared_mutex> lock(fix_lock_);
-      frozen_cur_table();
-    }
-  } else {
+
     // Sharding mode: distribute to appropriate shards
     for (const auto& pair : key_value_pairs) {
       auto index = std::hash<std::string_view>{}(pair.first) % Global_::NUMS_SHARDS;
       std::unique_lock<std::shared_mutex> lock(cur_lock_[index]);
       current_table[index]->Insert(pair.first, pair.second, transaction_id);
-    }
   }
 }
 std::optional<std::pair<std::string, uint64_t>> MemTable::get(std::string_view key,
                                                               const uint64_t   transaction_id) {
-  if (!open_shard_) {
-    std::shared_lock<std::shared_mutex> lock(cur_lock_[0]);
-    auto                                result = current_table[0]->Get(key, transaction_id);
-    if (result.has_value()) {
-      return std::make_pair(std::move(result->value), result->transaction_id);
-    }
-
-    lock.unlock();
-    std::shared_lock<std::shared_mutex> second_lock(fix_lock_);
-    for (const auto& fixed_table : fixed_tables) {
-      auto result = fixed_table->Get(key, transaction_id);
-      if (result.has_value()) {
-        return std::make_pair(std::move(result->value), result->transaction_id);
-      }
-    }
-    return std::nullopt;
-  }
       auto index = std::hash<std::string_view>{}(key) % Global_::NUMS_SHARDS;
 std::shared_lock<std::shared_mutex> lock(cur_lock_[index]);
     auto                                result = current_table[index]->Get(key, transaction_id);
     if (result.has_value()) {
       return std::make_pair(std::move(result->value), result->transaction_id);
     }
-
+lock.unlock();
   // Check fixed tables
   std::shared_lock<std::shared_mutex> second_lock(fix_lock_);
   for (const auto& fixed_table : fixed_tables) {
-    auto result = fixed_table->Get(key, transaction_id);
-    if (result.has_value()) {
-      return std::make_pair(std::move(result->value), result->transaction_id);
+    if(fixed_table->get_num_shard()==index){
+      auto res=fixed_table->Get(key);
+      if (res.has_value()) {
+      return std::make_pair(std::move(res->value), res->transaction_id);
+    } 
     }
   }
   return std::nullopt;
@@ -292,13 +258,6 @@ std::vector<std::tuple<std::string, std::optional<std::string>, uint64_t>> MemTa
   return result;
 }
 std::size_t MemTable::get_node_num() const {
-  if (!open_shard_) {
-    std::size_t result = 0;
-    for (auto& it : fixed_tables) {
-      result += it->getnodecount();
-    }
-    return result + current_table[0]->getnodecount();
-  }
   std::size_t result = 0;
   for (auto& it : current_table) {
     result += it->getnodecount();
@@ -312,9 +271,6 @@ std::size_t MemTable::get_fixed_size() {
   return fixed_bytes;
 }
 std::size_t MemTable::get_cur_size() {
-  if (!open_shard_) {
-    return current_table[0]->get_size();
-  }
   std::size_t result = 0;
   for (auto& it : current_table) {
     result += it->get_size();
@@ -334,22 +290,12 @@ void MemTable::remove_mutex(std::string key, const uint64_t transaction_id) {
 // 批量删除
 void MemTable::remove_batch(const std::vector<std::string>& key_value_pairs,
                             const uint64_t                  transaction_id) {
-if (!open_shard_) {
-    for (const auto& pair : key_value_pairs) {
-      current_table[0]->Insert(pair, std::string(), transaction_id);
-    }
-    if (current_table[0]->get_size() > Global_::MAX_MEMTABLE_SIZE_PER_TABLE) {
-      std::unique_lock<std::shared_mutex> lock(fix_lock_);
-      frozen_cur_table();
-    }
-  } else {
     // Sharding mode: distribute to appropriate shards
     for (const auto& pair : key_value_pairs) {
       auto index = std::hash<std::string_view>{}(pair) % Global_::NUMS_SHARDS;
       std::unique_lock<std::shared_mutex> lock(cur_lock_[index]);
       current_table[index]->Insert(pair, std::string(), transaction_id);
     }
-  }
 }
 bool MemTable::IsFull(size_t target) {
   return current_table[target]->get_size() >= Global_::MAX_MEMTABLE_SIZE_PER_TABLE;
@@ -366,13 +312,15 @@ std::unique_ptr<Skiplist> MemTable::flushtodisk() {
 }
 
 // This function is used to flush the current memtable to disk,just for test
-std::unique_ptr<Skiplist> MemTable::flush() {
-  std::unique_lock<std::shared_mutex> lock(cur_lock_[0]);
-  auto                                new_table = std::move(std::make_unique<Skiplist>());
-  auto                                temp      = std::move(current_table[0]);
-  current_table[0]                              = std::move(new_table);
-  fixed_bytes += current_table[0]->get_size();
-  return temp;
+std::list<std::unique_ptr<Skiplist>> MemTable::flush() {
+std::list<std::unique_ptr<Skiplist>> res;
+for (auto &it:current_table) {
+if (it->getnodecount()==0) {
+continue;
+}
+res.emplace_back(std::move(it));
+}
+return res;
 }
 std::list<std::unique_ptr<Skiplist>> MemTable::flushsync() {
   std::unique_lock<std::shared_mutex> lock(cur_lock_[0]);
@@ -392,6 +340,7 @@ bool MemTable::frozen_cur_table(bool force, size_t target) {
 
     auto new_table = std::make_unique<Skiplist>();
     auto temp      = std::move(current_table[target]);
+    new_table->set_num_shard(target);
     current_table[target] = std::move(new_table);
     lock.unlock();          // released once, correctly
 
@@ -403,13 +352,13 @@ bool MemTable::frozen_cur_table(bool force, size_t target) {
   }
 
   // ── force: freeze every non-empty shard independently ────────────────────
-  bool froze_any = false;
   for (size_t index = 0; index < current_table.size(); ++index) {
     std::unique_ptr<Skiplist> temp;
     {
       std::unique_lock<std::shared_mutex> lock(cur_lock_[index]); // one lock per shard
-      if (current_table[index]->get_size() == 0) continue;
+      if (current_table[index]->getnodecount() == 0) continue;
       auto new_table = std::make_unique<Skiplist>();
+      new_table->set_num_shard(index);
       temp = std::move(current_table[index]);
       current_table[index] = std::move(new_table);
     }  // ← lock released here, once, correctly
@@ -417,9 +366,8 @@ bool MemTable::frozen_cur_table(bool force, size_t target) {
     std::unique_lock<std::shared_mutex> lk2(fix_lock_);
     fixed_bytes += temp->get_size();
     fixed_tables.push_back(std::move(temp));
-    froze_any = true;
   }
-  return froze_any;
+  return true;
 }
 
 MemTableIterator MemTable::begin() {
@@ -462,12 +410,8 @@ MemTableIterator MemTable::prefix_serach(std::string_view key, const uint64_t tr
 }
 std::vector<size_t> MemTable::getShardNodeCounts() const {
   std::vector<size_t> counts;
-  if (!open_shard_) {
-    counts.push_back(current_table[0]->getnodecount());
-  } else {
     for (const auto& table : current_table) {
       counts.push_back(table->getnodecount());
     }
-  }
   return counts;
 }

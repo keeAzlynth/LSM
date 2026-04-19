@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iterator>
+#include <memory>
 #include <optional>
 #include <print>
 #include <string>
@@ -56,7 +57,7 @@ std::shared_ptr<Sstable> Sstable::open(size_t sst_id, FileObj file_obj_,
   auto     bloom_bytes = sst->file_obj.read_to_slice(sst->bloom_offset, bloom_size);
 
   auto bloom        = BloomFilter::decode(bloom_bytes);
-  sst->bloom_filter = std::make_shared<BloomFilter>(std::move(bloom));
+  sst->bloom_filter = std::make_unique<BloomFilter>(std::move(bloom));
 
   // 3. 读取并解码元数据块
   uint32_t meta_size  = sst->bloom_offset - sst->meta_block_offset;
@@ -122,71 +123,80 @@ std::shared_ptr<Block> Sstable::read_block(size_t block_idx) {
 
 std::optional<size_t> Sstable::find_block_idx(std::string_view key, bool is_prefix) {
   if (!is_prefix) {
-    // 精确查询：先在布隆过滤器判断key是否存在
     if (bloom_filter != nullptr && !bloom_filter->possibly_contains(key)) {
       return std::nullopt;
     }
 
-    // 二分查找找到包含该key的块
-    size_t left  = 0;
+    size_t left = 0;
     size_t right = block_metas.size();
-
     while (left < right) {
-      size_t      mid  = left + (right - left) / 2;
+      size_t mid = left + (right - left) / 2;
       const auto& meta = block_metas[mid];
       if (key < meta.first_key_) {
         right = mid;
       } else if (key > meta.last_key_) {
         left = mid + 1;
       } else {
-        return mid;  // key在这个块的范围内
+        return mid;
       }
     }
     return std::nullopt;
   } else {
-    // 前缀查询：找到第一个块，其中last_key >= key_prefix
-    // 这样该块可能包含以key_prefix开头的keys
-    size_t                left  = 0;
-    size_t                right = block_metas.size();
+    // 前缀查询：目标是找到第一个 last_key >= key_prefix 的块
+    size_t left = 0;
+    size_t right = block_metas.size();
     std::optional<size_t> result;
 
     while (left < right) {
-      size_t      mid  = left + (right - left) / 2;
-      const auto& meta = block_metas[mid];
-      if (meta.last_key_ >= key) {
-        // 这个块可能包含前缀匹配的keys
-        result = mid;
-        right  = mid;  // 继续查找更早的块
-      } else {
-        left = mid + 1;
-      }
+        size_t mid = left + (right - left) / 2;
+        const auto& meta = block_metas[mid];
+
+        // 关键逻辑：
+        // 只要当前块的结束键大于等于前缀，或者结束键本身就以该前缀开头
+        // 那么这个块（或它之前的块）就可能包含目标数据
+        bool is_possible = (meta.last_key_ >= key) || meta.last_key_.starts_with(key);
+
+        if (is_possible) {
+            result = mid;   // 暂存当前可能的最小索引
+            right = mid;    // 尝试往左边找更早的块
+        } else {
+            left = mid + 1; // 当前块彻底小于前缀，往右找
+        }
     }
     return result;
-  }
+}
 }
 std::vector<std::shared_ptr<Block>> Sstable::find_block_range(std::string_view key_prefix) {
-  std::vector<std::shared_ptr<Block>> result;
-  if ((key_prefix < first_key && !first_key.starts_with(key_prefix)) || key_prefix > last_key) {
-    return result;
-  }
+    std::vector<std::shared_ptr<Block>> result;
 
-  auto res1 = find_block_idx(key_prefix, true);
-  if (!res1.has_value())
-    return result;
-
-  result.push_back(read_block(res1.value()));
-  std::string key_prefix_end = std::string(key_prefix) + '\xFF';
-  for (int index = res1.value() + 1; index < (int) block_metas.size(); index++) {
-    // block的first_key还在前缀范围内，继续收集
-    if (block_metas[index].first_key_.starts_with(key_prefix) ||
-        block_metas[index].first_key_ < key_prefix_end) {
-      result.push_back(read_block(index));
-    } else {
-      break;  // ← break放在这里，超出范围才停止
+    auto res1 = find_block_idx(key_prefix, true);
+    if (!res1.has_value()) {
+      spdlog::error("DEBUG: find_block_idx failed for prefix: {}", key_prefix);
+      spdlog::error("DEBUG: Total blocks in SSTable: {}", block_metas.size());
+      for(size_t i = 0; i < block_metas.size(); ++i) {
+          spdlog::error("Block {}: [First: {} --- Last: {}]", 
+                        i, block_metas[i].first_key_, block_metas[i].last_key_);
+      }
+        return result;
     }
-  }
 
-  return result;
+    for (size_t index = res1.value(); index < block_metas.size(); index++) {
+        const auto& meta = block_metas[index];
+
+        // 只要块的起始键小于等于前缀（或者是前缀的超集），
+        // 或者起始键本身就以该前缀开头，这个块就必须读
+        bool start_match = meta.first_key_.starts_with(key_prefix);
+        bool prefix_inside = (meta.first_key_ <= key_prefix && (meta.last_key_ >= key_prefix || meta.last_key_.starts_with(key_prefix)));
+
+        if (start_match || prefix_inside) {
+            result.push_back(read_block(index));
+        } else {
+            // SSTable是有序的，一旦当前块的 first_key 已经大于前缀且不包含前缀
+            // 那么后面的块绝对不会再有了，直接跳出
+            break;
+        }
+    }
+    return result;
 }
 size_t Sstable::num_blocks() const {
   return block_metas.size();
@@ -268,63 +278,62 @@ std::pair<uint64_t, uint64_t> Sstable::get_tranc_id_range() const {
 std::vector<std::tuple<std::string, std::string, uint64_t>> Sstable::get_prefix_range(
     std::string_view key, uint64_t tranc_id) {
   std::vector<std::tuple<std::string, std::string, uint64_t>> res;
-  if (key > last_key || (key < first_key && !first_key.starts_with(key))) {
-    spdlog::info(
-        "Sstable::get_prefix_range(const std::string& key,uint64_t tranc_id) Prefix out of range: "
-        "{} not in [{}, {}]\n",
-        key, first_key, last_key);
+
+  // 1. 简化入口检查：只有当 prefix 绝对大于 SSTable 的最大 key 且不匹配时才退出
+  // 比如 prefix 是 "v", last_key 是 "u..."
+  if (key > last_key && !last_key.starts_with(key)) {
     return res;
   }
 
+  // 2. 查找块范围
   auto result = find_block_range(key);
   if (result.empty()) {
-    spdlog::info(
-        "Sstable::get_prefix_range(const std::string& key,uint64_t tranc_id) No blocks found for "
-        "prefix: {}\n",
-        key);
+    spdlog::info("Sstable::get_prefix_range: No blocks found in index for prefix: {}", key);
     return res;
   }
+
   for (auto& re : result) {
     auto range_res = re->get_prefix_tran_id(key, tranc_id);
     std::ranges::move(range_res.begin(), range_res.end(), std::back_inserter(res));
   }
   return res;
 }
-Sstbuild::Sstbuild(size_t block_size, bool has_bloom) : block_(block_size) {
-  // 初始化第一个block
-  if (has_bloom) {
-    bloom_filter = std::make_shared<BloomFilter>(Global_::bloom_filter_expected_size_,
-                                                 Global_::bloom_filter_expected_error_rate_);
-  }
-  clean();
+  void Sstable::print_sstable_debug() {
+for (auto it=0;it<block_metas.size();it++) {
+shared_from_this()->read_block(it)->print_debug();
+}
+}
+Sstbuild::Sstbuild(size_t block_size):bloom_filter(std::make_unique<BloomFilter>()),block_(std::make_unique<Block>(block_size)){
+  min_tranc_id=0;
+  max_tranc_id=0;  
 }
 
 void Sstbuild::clean() {
+  min_tranc_id=0;
+  max_tranc_id=0;
+  current_block_first_key_.clear();
+  current_block_last_key_.clear();
+    bloom_filter = std::make_unique<BloomFilter>(Global_::bloom_filter_expected_size_,
+                                                 Global_::bloom_filter_expected_error_rate_);
+block_=std::make_shared<Block>();
   block_metas.clear();
-  data.clear();
-  first_key.clear();
-  last_key.clear();
 }
 void Sstbuild::add(const std::string& key, const std::string& value, uint64_t tranc_id) {
-  // 记录第一个key
-  if (first_key.empty()) {
-    first_key = key;
-  }
-
   // 在布隆过滤器中添加key
   if (bloom_filter != nullptr) {
     bloom_filter->add(key);
   }
 
-  bool force_write = key == last_key;
 
   // 记录事务id范围
   max_tranc_id = std::max(max_tranc_id, tranc_id);
   min_tranc_id = std::min(min_tranc_id, tranc_id);
-
-  if (block_.add_entry(key, value, tranc_id, force_write)) {
-    // block 插入成功
-    last_key = key;
+  if (!is_first_key_set_) {
+        current_block_first_key_ = key;
+        is_first_key_set_ = true;
+    }
+  if (block_->add_entry(key, value, tranc_id)) {
+      current_block_last_key_ =key; // 每次 add 都更新 last_key
     return;
   }
 
@@ -332,25 +341,25 @@ void Sstbuild::add(const std::string& key, const std::string& value, uint64_t tr
   finish_block();
 
   // 将条目添加到新 block 中（必须成功，否则报错）
-  if (!block_.add_entry(key, value, tranc_id)) {
+  if (!block_->add_entry(key, value, tranc_id)) {
     throw std::runtime_error("Failed to add entry to new block (entry too large?)");
   }
-
-  first_key = key;
-  last_key  = key;
+   current_block_first_key_ = key;
+  current_block_last_key_  = key;
+  is_first_key_set_        = true;
 }
 
 void Sstbuild::finish_block() {
   // 只有当 block 不为空时才编码并保存
-  if (block_.is_empty()) {
+  if (block_->is_empty()) {
     spdlog::info("DBG finish_block: block is empty, skipping");
     return;
   }
-
+ 
   auto old_block     = std::move(block_);
-  block_             = Block(Global_::Block_SIZE);  // 创建新 block
-  auto encoded_block = old_block.encode();
-
+  block_             =std::move(std::make_shared<Block>());
+  auto encoded_block = old_block->encode();
+is_first_key_set_=false;
   if (encoded_block.empty()) {
     spdlog::info("ERROR: encoded_block is empty!");
     throw std::runtime_error("Block encode returned empty data");
@@ -363,16 +372,17 @@ void Sstbuild::finish_block() {
   data.insert(data.end(), encoded_block.begin(), encoded_block.end());
 
   // 保存元数据
-  block_metas.emplace_back(first_key, last_key, start_offset);
+
+  block_metas.emplace_back(std::move(current_block_first_key_), std::move(current_block_last_key_), start_offset);
 }
 
 size_t Sstbuild::estimated_size() const {
-  return data.size();
+  return data.size() + block_->get_cur_size();  // 加上当前未 flush 的 block 大小
 }
 
 std::shared_ptr<Sstable> Sstbuild::build(std::shared_ptr<BlockCache> block_cache,
                                          const std::string& path, size_t sst_id) {
-  if (!block_.is_empty()) {
+  if (!block_->is_empty()) {
     finish_block();
   }
 
@@ -425,7 +435,7 @@ std::shared_ptr<Sstable> Sstbuild::build(std::shared_ptr<BlockCache> block_cache
   res->first_key         = block_metas.front().first_key_;
   res->last_key          = block_metas.back().last_key_;
   res->meta_block_offset = meta_offset;
-  res->bloom_filter      = bloom_filter;
+  res->bloom_filter      = std::move(bloom_filter);
   res->bloom_offset      = bloom_offset;
   res->block_metas       = std::move(block_metas);
   res->block_cache       = block_cache;

@@ -55,6 +55,12 @@ endif()
 
 # 查找 GTest
 find_package(GTest REQUIRED)
+find_package(spdlog REQUIRED)
+
+find_package(fmt QUIET)
+if(NOT fmt_FOUND)
+    target_compile_definitions(spdlog::spdlog INTERFACE SPDLOG_FMT_EXTERNAL=OFF)
+endif()
 
 # 创建测试可执行文件
 add_executable(memtable_test
@@ -71,6 +77,8 @@ target_include_directories(memtable_test PRIVATE ../../include)
 target_link_libraries(memtable_test PRIVATE 
     GTest::gtest 
     GTest::gtest_main 
+    spdlog::spdlog
+    fmt::fmt
     pthread
 )
 

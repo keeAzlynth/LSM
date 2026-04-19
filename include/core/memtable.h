@@ -56,7 +56,7 @@ class MemTable {
   friend class LSM_Engine;
 
  public:
-  MemTable(bool open_shard = true, size_t shard_num = 1);
+  MemTable();
   MemTable(const MemTable& other)            = delete;
   MemTable& operator=(const MemTable& other) = delete;
   ~MemTable()                                = default;
@@ -85,7 +85,7 @@ class MemTable {
   void   remove_batch(const std::vector<std::string>& key_pairs, const uint64_t transaction_id = 0);
   bool   IsFull(size_t target=0);
   std::unique_ptr<Skiplist>            flushtodisk();
-  std::unique_ptr<Skiplist>            flush();
+  std::list<std::unique_ptr<Skiplist>>            flush();
   std::list<std::unique_ptr<Skiplist>> flushsync();
   bool                                 frozen_cur_table(bool force = false,size_t target=0);
   MemTableIterator                     begin();
@@ -96,7 +96,6 @@ class MemTable {
   std::vector<size_t> getShardNodeCounts() const;
 
  private:
-  bool                                                        open_shard_;
   std::array<std::unique_ptr<Skiplist>, Global_::NUMS_SHARDS> current_table;  // 活跃 SkipList
   std::list<std::unique_ptr<Skiplist>> fixed_tables;  // 不可写的 SkipList==InmutTable
   std::atomic_size_t                   fixed_bytes;   // fixed_tables的跳表的大小

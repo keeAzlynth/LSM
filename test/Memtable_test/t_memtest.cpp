@@ -13,7 +13,7 @@
 
 class MemtableTest : public ::testing::Test {
  protected:
-  void SetUp() override { memtable = std::move(std::make_unique<MemTable>(false)); }
+  void SetUp() override { memtable = std::move(std::make_unique<MemTable>()); }
 
   std::unique_ptr<MemTable> memtable;
 
@@ -46,7 +46,7 @@ class MemtableTest : public ::testing::Test {
 
 // 基本的 put/get 操作测试
 TEST_F(MemtableTest, BasicPutGet) {
-  memtable->put("key1", "value1");
+  memtable->put_mutex("key1", "value1");
   auto result = memtable->get("key1");
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result.value().first, "value1");
@@ -56,9 +56,9 @@ TEST_F(MemtableTest, BasicPutGet) {
 TEST_F(MemtableTest, MutexPutGet) {
   memtable->put_mutex("key1", "value1");
   std::vector<std::string> values;
-  auto                     it = memtable->cur_get("key1");
-  EXPECT_TRUE(it.valid());
-  values.emplace_back(it.getValue().second);
+  auto                     it = memtable->get("key1");
+  EXPECT_TRUE(it.has_value());
+  values.emplace_back(it.value().first);
   EXPECT_FALSE(values.empty());
   EXPECT_EQ(values[0], "value1");
 }
@@ -103,12 +103,12 @@ TEST_F(MemtableTest, RemoveOperations) {
 
   // 插入数据
   for (const auto& [key, value] : test_data) {
-    memtable->put(key, value);
+    memtable->put_mutex(key, value);
   }
 
   // 删除前50个键
   for (int i = 0; i < 50; ++i) {
-    memtable->remove(std::format("key{}", i));
+    memtable->remove_mutex(std::format("key{}", i));
   }
 
   // 验证删除结果
@@ -229,7 +229,7 @@ TEST_F(MemtableTest, PerformanceAndMemoryUsageTest) {
   // 插入性能测试
   auto insert_start = std::chrono::high_resolution_clock::now();
   for (const auto& [key, value] : test_data) {
-    memtable->put(key, value);
+    memtable->put_mutex(key, value);
   }
   auto insert_end = std::chrono::high_resolution_clock::now();
   auto insert_duration =
@@ -274,96 +274,8 @@ TEST_F(MemtableTest, PerformanceAndMemoryUsageTest) {
 }
 
 // Benchmark WITH sharding
-TEST_F(MemtableTest, ConcurrentPutGet_Benchmark_With_NO_Sharding) {
-  auto memtable_shard = std::make_unique<MemTable>(false);
-
-  const int NUM_THREADS     = 10;
-  const int KEYS_PER_THREAD = 50000;
-  const int TOTAL_OPS       = NUM_THREADS * KEYS_PER_THREAD;
-
-  std::vector<std::pair<std::string, std::string>> test_data(TOTAL_OPS);
-  for (int t = 0; t < NUM_THREADS; ++t) {
-    for (int i = 0; i < KEYS_PER_THREAD; ++i) {
-      int idx        = t * KEYS_PER_THREAD + i;
-      test_data[idx] = {std::format("shard_t{:02d}_k{:05d}", t, i),
-                        std::format("val_t{:02d}_i{:05d}", t, i)};
-    }
-  }
-
-  std::atomic<int>         write_success{0};
-  std::vector<std::thread> writers;
-
-  auto write_start = std::chrono::steady_clock::now();
-  for (int t = 0; t < NUM_THREADS; ++t) {
-    writers.emplace_back([&, t]() {
-      for (int i = 0; i < KEYS_PER_THREAD; ++i) {
-        int idx = t * KEYS_PER_THREAD + i;
-        memtable_shard->put_mutex(test_data[idx].first, test_data[idx].second);
-        write_success.fetch_add(1, std::memory_order_relaxed);
-      }
-    });
-  }
-
-  for (auto& w : writers) {
-    w.join();
-  }
-  writers.clear();
-
-  auto   write_end = std::chrono::steady_clock::now();
-  double write_sec = std::chrono::duration<double>(write_end - write_start).count();
-  double write_qps = TOTAL_OPS / write_sec;
-
-  // Print actual shard node counts
-  std::print("\n=== ACTUAL SHARD NODE COUNTS AFTER WRITE ===\n");
-  auto   shard_counts = memtable_shard->getShardNodeCounts();
-  size_t total_nodes  = 0;
-  for (size_t i = 0; i < shard_counts.size(); ++i) {
-    std::print("Shard[{}]: {} nodes\n", i, shard_counts[i]);
-    total_nodes += shard_counts[i];
-  }
-  std::print("Total nodes: {}\n", total_nodes);
-
-  std::vector<std::thread> readers;
-  std::atomic<int>         found_count{0};
-  auto                     read_start = std::chrono::steady_clock::now();
-
-  for (int t = 0; t < NUM_THREADS; ++t) {
-    readers.emplace_back([&, t]() {
-      for (int i = 0; i < KEYS_PER_THREAD; ++i) {
-        int idx               = t * KEYS_PER_THREAD + i;
-        auto& [key, expected] = test_data[idx];
-        auto val              = memtable_shard->get(key);
-        if (val.has_value() && val.value().first == expected) {
-          found_count.fetch_add(1, std::memory_order_relaxed);
-        }
-      }
-    });
-  }
-
-  for (auto& r : readers) {
-    r.join();
-  }
-  readers.clear();
-
-  auto   read_end = std::chrono::steady_clock::now();
-  double read_sec = std::chrono::duration<double>(read_end - read_start).count();
-  double read_qps = TOTAL_OPS / read_sec;
-
-  std::print("\n=== WITH SHARDING (open_shard=false) ===\n");
-  std::print("Write: {} ops in {:.3f}s => {:.0f} QPS\n", TOTAL_OPS, write_sec, write_qps);
-  std::print("Read:  {} ops in {:.3f}s => {:.0f} QPS\n", TOTAL_OPS, read_sec, read_qps);
-
-  EXPECT_EQ(write_success.load(), TOTAL_OPS);
-  EXPECT_EQ(found_count.load(), TOTAL_OPS);
-
-  // Explicit cleanup before test exit
-  memtable_shard.reset();
-  test_data.clear();
-}
-
-// Benchmark WITH sharding
 TEST_F(MemtableTest, ConcurrentPutGet_Benchmark_Sharding) {
-  auto memtable_shard = std::make_unique<MemTable>(true);
+  auto memtable_shard = std::make_unique<MemTable>();
 
   const int NUM_THREADS     = 10;
   const int KEYS_PER_THREAD = 100000;
@@ -443,10 +355,6 @@ TEST_F(MemtableTest, ConcurrentPutGet_Benchmark_Sharding) {
 
   EXPECT_EQ(write_success.load(), TOTAL_OPS);
   EXPECT_EQ(found_count.load(), TOTAL_OPS);
-
-  // Explicit cleanup before test exit
-  memtable_shard.reset();
-  test_data.clear();
 }
 
 int main(int argc, char** argv) {

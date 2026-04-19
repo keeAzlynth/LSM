@@ -1,7 +1,6 @@
 #pragma once
 #include "file.h"
 #include "../core/Global.h"
-
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>

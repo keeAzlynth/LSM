@@ -91,6 +91,16 @@ std::shared_ptr<Block> Block::decode(const std::vector<uint8_t>& encoded, bool w
 }
 
 // safe get_key/get_value/get_tranc_id with bounds checks
+std::string_view Block::get_key_view(const std::size_t offset) const {
+  if (offset > Offset_[Offset_.size() - 1]) {
+    spdlog::info(" Block::get_key(const std::size_t offset) {} Invaild offset to much{}", offset,
+                 Offset_[Offset_.size() - 1]);
+  }
+  uint16_t key_len;
+  std::memcpy(&key_len, Data_.data() + offset, sizeof(uint16_t));
+  return std::string_view(reinterpret_cast<const char*>(Data_.data() + offset + sizeof(uint16_t)),
+                     key_len);
+}
 std::string Block::get_key(const std::size_t offset) const {
   if (offset > Offset_[Offset_.size() - 1]) {
     spdlog::info(" Block::get_key(const std::size_t offset) {} Invaild offset to much{}", offset,
@@ -175,7 +185,7 @@ std::optional<std::pair<size_t, size_t>> Block::get_offset_binary(std::string_vi
   int found = -1;
   while (left <= right) {
     int         mid     = left + (right - left) / 2;
-    std::string mid_key = get_key(Offset_[mid]);
+    auto mid_key = get_key_view(Offset_[mid]);
     if (mid_key == key) {
       found = mid;
       break;
@@ -191,7 +201,7 @@ std::optional<std::pair<size_t, size_t>> Block::get_offset_binary(std::string_vi
 
   // 同 key 的版本是连续存放的，并且按新到旧的顺序写入。
   int first = found;
-  while (first > 0 && get_key(Offset_[first - 1]) == key) {
+  while (first > 0 && get_key_view(Offset_[first - 1]) == key) {
     --first;
   }
 
@@ -220,7 +230,7 @@ std::optional<std::pair<size_t, size_t>> Block::get_prefix_begin_offset_binary(
   auto exact = get_offset_binary(key_prefix);
   if (exact.has_value()) {
     auto index = exact.value().second;
-    while (index != 0 && get_key(Offset_[index - 1]) == key_prefix) {
+    while (index != 0 && get_key_view(Offset_[index - 1]) == key_prefix) {
       index--;
     }
     return std::make_optional<std::pair<size_t, size_t>>(Offset_[index], index);
@@ -232,7 +242,7 @@ std::optional<std::pair<size_t, size_t>> Block::get_prefix_begin_offset_binary(
   int result_idx = -1;
   while (left <= right) {
     int         mid     = left + (right - left) / 2;
-    std::string mid_key = get_key(Offset_[mid]);
+    auto mid_key = get_key_view(Offset_[mid]);
     if (mid_key.starts_with(key_prefix)) {
       result_idx = mid;
       right      = mid - 1;  // 继续查找可能更早的匹配项
@@ -250,31 +260,36 @@ std::optional<std::pair<size_t, size_t>> Block::get_prefix_begin_offset_binary(
 
 std::optional<std::pair<size_t, size_t>> Block::get_prefix_end_offset_binary(
     std::string_view key_prefix) {
-  if (Offset_.empty()) {
-    return std::nullopt;
-  }
-  int         left           = 0;
-  int         right          = Offset_.size() - 1;
-  int         result_idx     = -1;
-  std::string key_prefix_str = std::string(key_prefix);
-  std::string key_prefix_end = key_prefix_str + '\xFF';
+  if (Offset_.empty()) return std::nullopt;
 
-  while (left <= right) {
-    int         mid     = left + (right - left) / 2;
-    std::string mid_key = get_key(Offset_[mid]);
-    if (mid_key.starts_with(key_prefix)) {
-      result_idx = mid;
-      left       = mid + 1;  // 继续查找可能更晚的匹配项
-    } else if (mid_key < key_prefix_end) {
-      left = mid + 1;  // mid+1，避免死循环
+  size_t left = 0;
+  size_t right = Offset_.size();
+  size_t res_idx = Offset_.size();
+
+  while (left < right) {
+    size_t mid = left + (right - left) / 2;
+    auto mid_key = get_key_view(Offset_[mid]);
+
+    // 只要当前 mid_key 还是以前缀开头，或者是小于前缀的
+    // 我们就往右找，直到找到第一个“大于前缀且不以前缀开头”的键
+    if (mid_key.starts_with(key_prefix) || mid_key < key_prefix) {
+      left = mid + 1;
     } else {
-      right = mid - 1;
+      res_idx = mid;
+      right = mid;
     }
   }
-  if (result_idx != -1) {
-    // 返回第一个不匹配的位置作为范围的结束
-    return std::make_pair(Offset_[result_idx], result_idx + 1);
+
+  // res_idx 现在是第一个不属于该前缀的元素的索引
+  // 我们返回它，作为 [begin, end) 的开区间终点
+  if (res_idx > 0) {
+    // 检查一下前一个元素是否真的匹配前缀，如果不匹配，说明整个 block 都没有
+    auto last_match_key = get_key_view(Offset_[res_idx - 1]);
+    if (last_match_key.starts_with(key_prefix)) {
+      return std::make_pair(Offset_[res_idx - 1], res_idx);
+    }
   }
+  
   return std::nullopt;
 }
 
@@ -285,8 +300,7 @@ std::vector<std::tuple<std::string, std::string, uint64_t>> Block::get_prefix_tr
   if (!result1.has_value()) {
     return retrieved_data;
   }
-  auto begin = std::make_shared<BlockIterator>(shared_from_this(), result1->second,
-                                               get_tranc_id(result1->first).value());
+  auto begin = std::make_shared<BlockIterator>(shared_from_this(), result1->second);
   if (result1.value().second == Offset_.size() - 1) {
     if (begin->get_cur_tranc_id() <= tranc_id) {
       auto entry = begin->getValue();
@@ -305,10 +319,7 @@ std::vector<std::tuple<std::string, std::string, uint64_t>> Block::get_prefix_tr
   }
 
   auto end = std::make_shared<BlockIterator>(
-      shared_from_this(), end_idx,
-      end_idx < Offset_.size() ? get_tranc_id(result2->first).value()
-                               : get_tranc_id(Offset_[Offset_.size() - 1]).value(),
-      false);
+      shared_from_this(), end_idx);
   while (*begin != *end) {
     if (begin->get_cur_tranc_id() <= tranc_id) {
       auto entry = begin->getValue();
@@ -414,13 +425,16 @@ BlockIterator Block::get_iterator(std::string_view key, const uint64_t tranc_id)
   if (!idx.has_value()) {
     return end();
   }
-  return BlockIterator(shared_from_this(), idx->second, tranc_id);
+  return BlockIterator(shared_from_this(), idx->second);
 }
 BlockIterator Block::begin() {
-  return BlockIterator(shared_from_this(), 0, 0);
+  return BlockIterator(shared_from_this(), 0);
+}
+BlockIterator Block::back(){
+  return  BlockIterator(shared_from_this(),Offset_.size()-1);
 }
 BlockIterator Block::end() {
-  return BlockIterator(shared_from_this(), Offset_.size(), 0);
+  return BlockIterator(shared_from_this(), Offset_.size());
 }
 
 std::optional<std::pair<std::shared_ptr<BlockIterator>, std::shared_ptr<BlockIterator>>>
@@ -429,11 +443,10 @@ Block::get_prefix_iterator(std::string key) {
   if (!result1.has_value()) {
     return std::nullopt;
   }
-  auto begin = std::make_shared<BlockIterator>(shared_from_this(), result1->second, 0, false);
+  auto begin = std::make_shared<BlockIterator>(shared_from_this(), result1->second);
   if (result1->second == Offset_.size() - 1) {
     auto end =
-        std::make_shared<BlockIterator>(shared_from_this(), Offset_.size(),
-                                        get_tranc_id(Offset_[Offset_.size() - 1]).value(), false);
+        std::make_shared<BlockIterator>(shared_from_this(), Offset_.size());
     return std::make_pair(begin, end);
   }
 
@@ -448,9 +461,6 @@ Block::get_prefix_iterator(std::string key) {
   }
 
   auto end = std::make_shared<BlockIterator>(
-      shared_from_this(), end_idx,
-      end_idx < Offset_.size() ? get_tranc_id(result2->first).value()
-                               : get_tranc_id(Offset_[Offset_.size() - 1]).value(),
-      false);
+      shared_from_this(), end_idx);
   return std::make_pair(begin, end);
 }

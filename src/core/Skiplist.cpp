@@ -136,7 +136,12 @@ bool Skiplist::Delete(std::string_view key) {
   }
   return true;
 }
-
+  void Skiplist::set_num_shard(int num_shard){
+    num_shard_=num_shard;
+  }
+  int Skiplist::get_num_shard()const{
+return num_shard_;
+  }
 std::optional<std::string> Skiplist::Contain(std::string_view key, const uint64_t transaction_id) {
   auto current = head.get();
   // 从最高层开始查找

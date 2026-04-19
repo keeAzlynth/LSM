@@ -38,11 +38,12 @@ class Block : public std::enable_shared_from_this<Block> {
   void          print_debug() const;
   BlockIterator get_iterator(std::string_view key, const uint64_t tranc_id = 0);
   BlockIterator begin();
+  BlockIterator back();
   BlockIterator end();
   // BlockIterator                       current_iterator();
   std::optional<std::pair<std::shared_ptr<BlockIterator>, std::shared_ptr<BlockIterator>>>
   get_prefix_iterator(std::string key);
-
+ std::string                                          get_key(const std::size_t offset) const;
  private:
   std::vector<uint8_t>  Data_;
   std::vector<uint16_t> Offset_;
@@ -52,7 +53,7 @@ class Block : public std::enable_shared_from_this<Block> {
     std::string    value;
     const uint64_t tranc_id;
   };
-  std::string                                          get_key(const std::size_t offset) const;
+  std::string_view                                     get_key_view(const std::size_t offset)const;
   std::optional<std::pair<std::string, uint64_t>> get_value(const std::size_t offset) const;
   std::shared_ptr<Block::Entry>                        get_entry(std::size_t offset);
 };

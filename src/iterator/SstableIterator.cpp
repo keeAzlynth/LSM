@@ -38,7 +38,7 @@ SstIterator::SstIterator(std::shared_ptr<Sstable> sst, uint64_t tranc_id)
   }
   m_block_idx = 0;
   auto block  = m_sst->read_block(m_block_idx);
-  m_block_it  = std::make_shared<BlockIterator>(block, 0, tranc_id);
+  m_block_it  = std::make_shared<BlockIterator>(block, 0);
 }
 
 SstIterator::SstIterator(std::shared_ptr<Sstable> sst, const std::string& key, uint64_t tranc_id,
@@ -55,10 +55,10 @@ SstIterator::SstIterator(std::shared_ptr<Sstable> sst, size_t block_idx,
   }
   auto block = m_sst->read_block(m_block_idx);
   if (exists_key_prefix(key)) {
-    m_block_it = std::make_shared<BlockIterator>(block, key, tranc_id);
+    m_block_it = std::make_shared<BlockIterator>(block, key);
     return;
   }
-  m_block_it = std::make_shared<BlockIterator>(block, 0, tranc_id);
+  m_block_it = std::make_shared<BlockIterator>(block, 0);
 }
 
 SstIterator::SstIterator(std::shared_ptr<Sstable> sst, std::shared_ptr<BlockIterator> block_iter,
@@ -90,7 +90,7 @@ void SstIterator::seek(const std::string& key, bool is_prefix) {
   m_block_idx = find_result.value();
 
   auto block = m_sst->read_block(m_block_idx);
-  m_block_it = std::make_shared<BlockIterator>(block, key, max_tranc_id_, is_prefix);
+  m_block_it = std::make_shared<BlockIterator>(block, key, is_prefix);
   if (m_block_it->is_end()) {
     set_end();
     return;
@@ -130,7 +130,7 @@ BaseIterator& SstIterator::operator++() {
     if (is_block_index_vaild(m_block_idx)) {
       // 读取下一个block
       auto          next_block = m_sst->read_block(m_block_idx);
-      BlockIterator new_block_it(next_block, 0, max_tranc_id_);
+      BlockIterator new_block_it(next_block, 0);
       cached_value  = std::nullopt;
       (*m_block_it) = new_block_it;
     } else {
@@ -141,7 +141,7 @@ BaseIterator& SstIterator::operator++() {
   return *this;
 }
 bool SstIterator::isEnd() const {
-  return m_block_it && m_sst->num_blocks() <= m_block_idx;
+  return !m_block_it || m_block_idx >= m_sst->num_blocks();
 }
 bool SstIterator::is_block_index_vaild(size_t block_index) const {
   return m_sst->is_block_index_vaild(block_index);

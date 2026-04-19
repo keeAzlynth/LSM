@@ -76,7 +76,7 @@ void remove_sst(size_t sst_id);       // 只 append，不 fsync
   // Internal: replay all valid records from an open FileObj.
   void replay(FileObj& f);
   // Internal: serialise one record and fsync — caller must hold mu_.
-  void write_record(uint8_t type, std::vector<uint8_t> payload);
+  void write_record(uint8_t type, const std::vector<uint8_t>& payload);
 
   std::string               path_;
   FileObj                   file_;
