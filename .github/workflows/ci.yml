@@ -2,11 +2,9 @@ name: CI
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
 
 permissions:
   contents: read
@@ -15,10 +13,6 @@ env:
   CMAKE_BUILD_TYPE: Release
   BUILD_DIR: build-ci
   CCACHE_DIR: ${{ github.workspace }}/.ccache
-  # Optional hook for Conan / vcpkg / custom toolchain injection.
-  # Example:
-  # EXTRA_CMAKE_ARGS: -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake
-  # EXTRA_CMAKE_ARGS: -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=$GITHUB_WORKSPACE/cmake/conan_provider.cmake
   EXTRA_CMAKE_ARGS: ""
 
 jobs:
@@ -30,16 +24,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            compiler: GCC
-            cc: gcc
-            cxx: g++
-          - os: ubuntu-latest
-            compiler: Clang
-            cc: clang
-            cxx: clang++
-          - os: macos-latest
-            compiler: AppleClang
+          # ── Ubuntu: 显式使用 GCC 14（ubuntu-24.04 apt 源已内置）
+          - os: ubuntu-24.04
+            compiler: GCC-14
+            cc: gcc-14
+            cxx: g++-14
+
+          # ── Ubuntu: LLVM 官方源提供的 Clang 18
+          - os: ubuntu-24.04
+            compiler: Clang-18
+            cc: clang-18
+            cxx: clang++-18
+            install_llvm: true   # 触发下面额外安装步骤
+
+          # ── macOS 15 = Xcode 16 = Apple Clang 16，支持完整 C++23
+          - os: macos-15
+            compiler: AppleClang-16
             cc: clang
             cxx: clang++
 
@@ -51,24 +51,35 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Ensure a recent CMake is available because the project requires CMake 4.x.
       - name: Setup CMake
         uses: lukka/get-cmake@latest
 
-      - name: Install Linux dependencies
+      # ── Ubuntu 公共依赖
+      - name: Install Linux base dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            ccache \
-            clang \
-            g++ \
-            gcc \
-            libfmt-dev \
-            libgtest-dev \
-            libspdlog-dev \
-            ninja-build
+            ccache ninja-build \
+            libfmt-dev libgtest-dev libspdlog-dev
 
+      # ── GCC 14（ubuntu-24.04 官方源已有，直接装）
+      - name: Install GCC 14
+        if: runner.os == 'Linux' && matrix.cc == 'gcc-14'
+        run: sudo apt-get install -y gcc-14 g++-14
+
+      # ── Clang 18（需要 LLVM 官方源）
+      - name: Install Clang 18
+        if: matrix.install_llvm == true
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-18 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm18.list
+          sudo apt-get update
+          sudo apt-get install -y clang-18 clang++-18
+
+      # ── macOS 依赖
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         run: |
@@ -77,39 +88,38 @@ jobs:
 
       - name: Export toolchain
         run: |
-          echo "CC=${{ matrix.cc }}" >> "$GITHUB_ENV"
+          echo "CC=${{ matrix.cc }}"   >> "$GITHUB_ENV"
           echo "CXX=${{ matrix.cxx }}" >> "$GITHUB_ENV"
-          echo "CMAKE_C_COMPILER=${{ matrix.cc }}" >> "$GITHUB_ENV"
+          echo "CMAKE_C_COMPILER=${{ matrix.cc }}"   >> "$GITHUB_ENV"
           echo "CMAKE_CXX_COMPILER=${{ matrix.cxx }}" >> "$GITHUB_ENV"
 
-      - name: Export Homebrew prefix
+      - name: Export Homebrew prefix (macOS)
         if: runner.os == 'macOS'
         run: |
-          echo "CMAKE_PREFIX_PATH=$(brew --prefix fmt);$(brew --prefix spdlog);$(brew --prefix googletest)" >> "$GITHUB_ENV"
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix fmt);$(brew --prefix spdlog);$(brew --prefix googletest)" \
+            >> "$GITHUB_ENV"
 
-      - name: Show compiler versions
+      # ── 版本确认，方便排查
+      - name: Show toolchain versions
         run: |
-          "$CC" --version
+          "$CC"  --version
           "$CXX" --version
-          cmake --version
-          ninja --version
+          cmake  --version
+          ninja  --version
 
       - name: Cache ccache
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-${{ matrix.compiler }}-${{ hashFiles('CMakeLists.txt', 'test/CMakeLists.txt', 'test/**/CMakeLists.txt') }}
-          restore-keys: |
-            ccache-${{ runner.os }}-${{ matrix.compiler }}-
+          restore-keys: ccache-${{ runner.os }}-${{ matrix.compiler }}-
 
-      # Build directory cache is best-effort and keyed by CMake/test definitions.
       - name: Cache build directory
         uses: actions/cache@v4
         with:
           path: ${{ env.BUILD_DIR }}
           key: build-${{ runner.os }}-${{ matrix.compiler }}-${{ hashFiles('CMakeLists.txt', 'test/CMakeLists.txt', 'test/**/CMakeLists.txt', 'include/**', 'src/**') }}
-          restore-keys: |
-            build-${{ runner.os }}-${{ matrix.compiler }}-
+          restore-keys: build-${{ runner.os }}-${{ matrix.compiler }}-
 
       - name: Configure
         run: |
@@ -125,16 +135,11 @@ jobs:
             -DENABLE_ALL_TESTS=ON \
             ${EXTRA_CMAKE_ARGS}
 
-      # Only build test targets. We intentionally do not build or run lsm_main / main.cpp.
       - name: Build tests
         run: |
           cmake --build "$BUILD_DIR" --parallel --target \
-            block_test \
-            blockmeta_test \
-            memtable_test \
-            skiplist_test \
-            sstable_test \
-            lsm_test
+            block_test blockmeta_test memtable_test \
+            skiplist_test sstable_test lsm_test
 
       - name: Run tests
         run: |
@@ -146,7 +151,6 @@ jobs:
             "./$BUILD_DIR/test/Sstable_test/sstable_test"
             "./$BUILD_DIR/test/LSM_test/lsm_test"
           )
-
           for test_bin in "${tests[@]}"; do
             echo "::group::$(basename "$test_bin")"
             "$test_bin" --gtest_color=yes
