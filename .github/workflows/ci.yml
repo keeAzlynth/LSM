@@ -1,0 +1,158 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  CMAKE_BUILD_TYPE: Release
+  BUILD_DIR: build-ci
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  # Optional hook for Conan / vcpkg / custom toolchain injection.
+  # Example:
+  # EXTRA_CMAKE_ARGS: -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake
+  # EXTRA_CMAKE_ARGS: -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=$GITHUB_WORKSPACE/cmake/conan_provider.cmake
+  EXTRA_CMAKE_ARGS: ""
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.os }} / ${{ matrix.compiler }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            compiler: GCC
+            cc: gcc
+            cxx: g++
+          - os: ubuntu-latest
+            compiler: Clang
+            cc: clang
+            cxx: clang++
+          - os: macos-latest
+            compiler: AppleClang
+            cc: clang
+            cxx: clang++
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Ensure a recent CMake is available because the project requires CMake 4.x.
+      - name: Setup CMake
+        uses: lukka/get-cmake@latest
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ccache \
+            clang \
+            g++ \
+            gcc \
+            libfmt-dev \
+            libgtest-dev \
+            libspdlog-dev \
+            ninja-build
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install ccache fmt googletest ninja spdlog
+
+      - name: Export toolchain
+        run: |
+          echo "CC=${{ matrix.cc }}" >> "$GITHUB_ENV"
+          echo "CXX=${{ matrix.cxx }}" >> "$GITHUB_ENV"
+          echo "CMAKE_C_COMPILER=${{ matrix.cc }}" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER=${{ matrix.cxx }}" >> "$GITHUB_ENV"
+
+      - name: Export Homebrew prefix
+        if: runner.os == 'macOS'
+        run: |
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix fmt);$(brew --prefix spdlog);$(brew --prefix googletest)" >> "$GITHUB_ENV"
+
+      - name: Show compiler versions
+        run: |
+          "$CC" --version
+          "$CXX" --version
+          cmake --version
+          ninja --version
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ matrix.compiler }}-${{ hashFiles('CMakeLists.txt', 'test/CMakeLists.txt', 'test/**/CMakeLists.txt') }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ matrix.compiler }}-
+
+      # Build directory cache is best-effort and keyed by CMake/test definitions.
+      - name: Cache build directory
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.BUILD_DIR }}
+          key: build-${{ runner.os }}-${{ matrix.compiler }}-${{ hashFiles('CMakeLists.txt', 'test/CMakeLists.txt', 'test/**/CMakeLists.txt', 'include/**', 'src/**') }}
+          restore-keys: |
+            build-${{ runner.os }}-${{ matrix.compiler }}-
+
+      - name: Configure
+        run: |
+          ccache --zero-stats || true
+          cmake -S . -B "$BUILD_DIR" -G Ninja \
+            -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE" \
+            -DCMAKE_C_STANDARD=17 \
+            -DCMAKE_CXX_STANDARD=23 \
+            -DCMAKE_C_COMPILER="$CMAKE_C_COMPILER" \
+            -DCMAKE_CXX_COMPILER="$CMAKE_CXX_COMPILER" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DENABLE_ALL_TESTS=ON \
+            ${EXTRA_CMAKE_ARGS}
+
+      # Only build test targets. We intentionally do not build or run lsm_main / main.cpp.
+      - name: Build tests
+        run: |
+          cmake --build "$BUILD_DIR" --parallel --target \
+            block_test \
+            blockmeta_test \
+            memtable_test \
+            skiplist_test \
+            sstable_test \
+            lsm_test
+
+      - name: Run tests
+        run: |
+          tests=(
+            "./$BUILD_DIR/test/Block_test/block_test"
+            "./$BUILD_DIR/test/BlockMeta_test/blockmeta_test"
+            "./$BUILD_DIR/test/Memtable_test/memtable_test"
+            "./$BUILD_DIR/test/Skiplist_test/skiplist_test"
+            "./$BUILD_DIR/test/Sstable_test/sstable_test"
+            "./$BUILD_DIR/test/LSM_test/lsm_test"
+          )
+
+          for test_bin in "${tests[@]}"; do
+            echo "::group::$(basename "$test_bin")"
+            "$test_bin" --gtest_color=yes
+            echo "::endgroup::"
+          done
+
+      - name: Show ccache stats
+        if: always()
+        run: ccache --show-stats || true
